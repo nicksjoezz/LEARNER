@@ -1,0 +1,31 @@
+Symbol: R_10
+Strategy: Strategy_5
+Description: UT Bot (2, 10) + ML Filter
+Overall Win Rate: 94.22%
+Total Trades: 2024
+Training History: 105117 candles (~365.0 days)
+Note: Training history represents the maximum available depth provided by the Deriv API for 5m synthetic index candles at the time of research.
+
+Strategy Configuration:
+- UT Bot Sensitivity (a): 2
+- ATR Period (c): 10
+
+Machine Learning Filter Definition:
+The ML Filter uses a Random Forest Classifier trained on the following technical features at the moment of the signal:
+1. RSI (14): Relative Strength Index to identify overbought/oversold conditions.
+2. MACD Histogram: Momentum difference to capture trend strength.
+3. ADX: Average Directional Index to filter out low-volatility/ranging markets.
+4. Bollinger Band %B (pband): Price position relative to volatility bands.
+5. EMA 200 Distance: Normalized distance from the long-term trend line.
+
+The model is trained to recognize 'Loss' patterns in the raw UT Bot signals and automatically blocks signals where the predicted probability of a win is low.
+
+60-Day Performance Intervals for R_10:
+                start                 end  win_rate  total_trades  max_consecutive_losses
+0 2025-03-03 23:15:00 2025-05-02 23:15:00  0.953125           320                       2
+1 2025-05-02 23:15:00 2025-07-01 23:15:00  0.957627           354                       2
+2 2025-07-01 23:15:00 2025-08-30 23:15:00  0.946269           335                       2
+3 2025-08-30 23:15:00 2025-10-29 23:15:00  0.938596           342                       2
+4 2025-10-29 23:15:00 2025-12-28 23:15:00  0.928783           337                       2
+5 2025-12-28 23:15:00 2026-02-26 23:15:00  0.927215           316                       2
+6 2026-02-26 23:15:00 2026-04-27 23:15:00  0.950000            20                       1

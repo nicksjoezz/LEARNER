@@ -1,0 +1,10 @@
+flask
+flask-socketio
+python-deriv-api
+ta
+pandas
+numpy
+scikit-learn
+pyyaml
+eventlet
+gunicorn

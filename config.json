@@ -4,5 +4,5 @@
     "symbol": "R_100",
     "strategy": "1",
     "trade_pc": 1,
-    "fetch_days": 730
+    "fetch_days": 365
 }

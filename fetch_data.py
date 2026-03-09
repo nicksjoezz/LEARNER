@@ -38,10 +38,17 @@ async def update_symbol_data(symbol, data_dir='data'):
 
     api = DerivAPI(app_id=app_id)
 
-    async def fetch_and_save(current_start, current_end, direction='backward'):
+    # Function for incremental candle fetching
+    async def fetch_missing_data(current_start, current_end):
         nonlocal df
         while current_end > current_start:
-            sys.stderr.write(f"[{symbol}] Fetching {direction} up to {datetime.fromtimestamp(current_end)}\n")
+            # Deriv's ticks_history with 'end' gives candles BEFORE that time.
+            # So to get the latest ones, we start from 'end_time' and go backward.
+            # BUT, to update an existing dataset, we can also go forward or backward.
+            # The most robust way is to fetch from 'end_time' backward until we hit
+            # the last recorded candle in our CSV.
+
+            sys.stderr.write(f"[{symbol}] Fetching missing candles up to {datetime.fromtimestamp(current_end)}\n")
             try:
                 response = await api.ticks_history({
                     'ticks_history': symbol,
@@ -62,18 +69,27 @@ async def update_symbol_data(symbol, data_dir='data'):
                     break
 
                 df_new = pd.DataFrame(candles)
+
+                # Identify if any of these candles are already in our DF
+                # If candles[0]['epoch'] is less than our last_recorded, it means we've caught up.
+
                 df = pd.concat([df, df_new]).drop_duplicates(subset=['epoch']).sort_values('epoch')
 
+                # Data Cleaning: Filter by fetch_days to keep on-disk data lean
                 cutoff = int((datetime.now() - timedelta(days=fetch_days + 1)).timestamp())
                 df = df[df['epoch'] >= cutoff]
 
+                # Save immediately
                 df.to_csv(filepath, index=False)
 
-                new_end = int(candles[0]['epoch']) - 1
-                if new_end >= current_end: break
-                current_end = new_end
+                # Check if the earliest candle in this batch is still after our target start
+                batch_earliest = int(candles[0]['epoch'])
+                if batch_earliest <= current_start:
+                    sys.stderr.write(f"[{symbol}] Caught up with historical data.\n")
+                    break
 
-                if current_end < current_start: break
+                # Move the 'end' backward for the next call
+                current_end = batch_earliest - 1
                 await asyncio.sleep(0.5)
 
             except Exception as e:
@@ -81,16 +97,20 @@ async def update_symbol_data(symbol, data_dir='data'):
                 await asyncio.sleep(5)
                 continue
 
+    # Determine what's missing
     last_recorded = int(df['epoch'].max()) if not df.empty else start_time
-    if end_time - last_recorded > granularity:
-        await fetch_and_save(last_recorded, end_time, direction='forward')
 
+    # If the gap between now and the last candle is more than one candle period, fetch.
+    if end_time - last_recorded > granularity:
+        await fetch_missing_data(last_recorded, end_time)
+
+    # Also check if we need to extend backwards to reach fetch_days
     earliest_recorded = int(df['epoch'].min()) if not df.empty else end_time
     if earliest_recorded > start_time:
-        await fetch_and_save(start_time, earliest_recorded, direction='backward')
+        await fetch_missing_data(start_time, earliest_recorded)
 
     await api.disconnect()
-    sys.stderr.write(f"Completed update for {symbol}. Total: {len(df)}\n")
+    sys.stderr.write(f"Completed incremental update for {symbol}. Total: {len(df)}\n")
     return df
 
 async def main():

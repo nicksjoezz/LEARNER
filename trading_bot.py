@@ -121,6 +121,14 @@ class TradingBot:
         self.config = config
         self.is_running = True
         self.current_symbol = config['symbol']
+
+        # Ensure model is initialized or wait briefly if retraining
+        strategy_idx = int(config['strategy'])
+        status = model_manager.get_model_status(self.current_symbol, strategy_idx)
+        if status == 'pending' or status == 'training':
+            self.log(f"Model {self.current_symbol} Strat {strategy_idx} is {status}. Waiting for initialization...")
+            # We don't block the entire start process, but signal check will handle it.
+
         if await self.connect():
             # Initial history fetch (500 candles for indicators)
             await self.fetch_initial_history()
@@ -197,11 +205,6 @@ class TradingBot:
             # Detect new candle (candle closed)
             if candle_epoch > self.last_candle_epoch:
                 self.log(f"CANDLE CLOSED: {time.ctime(self.last_candle_epoch)}")
-
-                # The closed candle data should be updated in history_df
-                # Deriv OHLC updates are for the building candle.
-                # So the one that just 'closed' is actually the previous building one.
-                # To be absolutely sure, we trigger an update of the history buffer.
                 asyncio.create_task(self.update_history_and_check_signals(candle_epoch))
                 self.last_candle_epoch = candle_epoch
 
@@ -211,27 +214,21 @@ class TradingBot:
 
         symbol = self.config['symbol']
         try:
-            # We only need the latest completed candle to update our buffer
             response = await self.api.ticks_history({
                 'ticks_history': symbol,
                 'end': 'latest',
-                'count': 2, # current building + previous closed
+                'count': 2,
                 'granularity': 300,
                 'style': 'candles'
             })
 
             if 'candles' in response and len(response['candles']) >= 2:
                 latest_closed_candle = response['candles'][0]
-
-                # Append to history_df
                 new_row = pd.DataFrame([latest_closed_candle])
                 self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch']).sort_values('epoch')
-
-                # Keep buffer size to 500
                 if len(self.history_df) > 500:
                     self.history_df = self.history_df.iloc[-500:]
 
-                # Check Signals on the buffer
                 await self.check_signals()
         except Exception as e:
             self.log(f"Error updating history buffer: {e}")
@@ -251,7 +248,6 @@ class TradingBot:
         a, c = strat_params[strategy_idx-1]
 
         try:
-            # Use in-memory history_df for calculations
             df_calc = self.history_df.copy()
             df_calc = add_indicators(df_calc)
             df_ut = ut_bot(df_calc, a=a, c=c)
@@ -262,9 +258,8 @@ class TradingBot:
 
             if buy_triggered or sell_triggered:
                 side = 'BUY' if buy_triggered else 'SELL'
-                self.log(f"Signal found: {side}. Verifying with Neural Filter (Symbol: {symbol} Strategy: {strategy_idx})...")
+                self.log(f"Signal found: {side}. Verifying with Neural Filter...")
 
-                # ML Filter verification using freshly (re)trained model
                 ml = await self.get_ml_filter(symbol, strategy_idx)
                 if ml:
                     df_ml = ml.filter_signals(df_ut)
@@ -275,7 +270,8 @@ class TradingBot:
                     else:
                         self.log(f"NEURAL FILTER: SIGNAL BLOCKED (Low probability).")
                 else:
-                    self.log(f"ML filter missing or training. Executing raw {side} trade.")
+                    status = model_manager.get_model_status(symbol, strategy_idx)
+                    self.log(f"ML filter is {status}. Executing raw {side} trade.")
                     await self.place_trade('CALL' if buy_triggered else 'PUT')
             else:
                 self.log("No signal found.")
@@ -285,7 +281,6 @@ class TradingBot:
 
     async def place_trade(self, side):
         try:
-            # Avoid double entry
             if any(c['side'] == side for c in self.active_contracts.values()):
                 self.log(f"Already have an active {side} trade. Skipping.")
                 return

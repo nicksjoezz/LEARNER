@@ -13,10 +13,10 @@ def load_fetch_config():
         try:
             with open(CONFIG_FILE, 'r') as f:
                 config = json.load(f)
-                return int(config.get('fetch_days', 730)), config.get('app_id', '1089')
+                return int(config.get('fetch_days', 730)), config.get('app_id', '62845')
         except:
             pass
-    return 730, '1089'
+    return 730, '62845'
 
 async def update_symbol_data(symbol, data_dir='data'):
     fetch_days, app_id = load_fetch_config()
@@ -39,16 +39,10 @@ async def update_symbol_data(symbol, data_dir='data'):
     api = DerivAPI(app_id=app_id)
 
     # Function for incremental candle fetching
-    async def fetch_missing_data(current_start, current_end):
+    async def fetch_missing_data(current_start, current_end, direction='backward'):
         nonlocal df
         while current_end > current_start:
-            # Deriv's ticks_history with 'end' gives candles BEFORE that time.
-            # So to get the latest ones, we start from 'end_time' and go backward.
-            # BUT, to update an existing dataset, we can also go forward or backward.
-            # The most robust way is to fetch from 'end_time' backward until we hit
-            # the last recorded candle in our CSV.
-
-            sys.stderr.write(f"[{symbol}] Fetching missing candles up to {datetime.fromtimestamp(current_end)}\n")
+            sys.stderr.write(f"[{symbol}] Fetching {direction} gap up to {datetime.fromtimestamp(current_end)}\n")
             try:
                 response = await api.ticks_history({
                     'ticks_history': symbol,
@@ -60,7 +54,11 @@ async def update_symbol_data(symbol, data_dir='data'):
                 })
 
                 if 'error' in response:
-                    sys.stderr.write(f"API Error: {response['error']}\n")
+                    err = response['error']
+                    sys.stderr.write(f"API Error ({err.get('code')}): {err.get('message')}\n")
+                    if err.get('code') == 'RateLimit':
+                        await asyncio.sleep(60)
+                        continue
                     break
 
                 candles = response.get('candles', [])
@@ -69,48 +67,46 @@ async def update_symbol_data(symbol, data_dir='data'):
                     break
 
                 df_new = pd.DataFrame(candles)
-
-                # Identify if any of these candles are already in our DF
-                # If candles[0]['epoch'] is less than our last_recorded, it means we've caught up.
-
                 df = pd.concat([df, df_new]).drop_duplicates(subset=['epoch']).sort_values('epoch')
 
-                # Data Cleaning: Filter by fetch_days to keep on-disk data lean
+                # Immediate filtering to keep only what's needed
                 cutoff = int((datetime.now() - timedelta(days=fetch_days + 1)).timestamp())
                 df = df[df['epoch'] >= cutoff]
 
-                # Save immediately
+                # SAVE REAL-TIME
                 df.to_csv(filepath, index=False)
 
-                # Check if the earliest candle in this batch is still after our target start
                 batch_earliest = int(candles[0]['epoch'])
-                if batch_earliest <= current_start:
-                    sys.stderr.write(f"[{symbol}] Caught up with historical data.\n")
+
+                # Check if we caught up with existing data or target start
+                # Use a small overlap to be safe
+                if direction == 'forward' and batch_earliest <= current_start:
+                    break
+                elif direction == 'backward' and batch_earliest <= current_start:
                     break
 
-                # Move the 'end' backward for the next call
+                if batch_earliest <= current_start: break
+
                 current_end = batch_earliest - 1
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1) # Responsible rate limiting
 
             except Exception as e:
-                sys.stderr.write(f"Fetch error: {e}. Retrying...\n")
-                await asyncio.sleep(5)
+                sys.stderr.write(f"Fetch error: {e}. Retrying in 10s...\n")
+                await asyncio.sleep(10)
                 continue
 
-    # Determine what's missing
+    # 1. Update forward from last recorded to now
     last_recorded = int(df['epoch'].max()) if not df.empty else start_time
-
-    # If the gap between now and the last candle is more than one candle period, fetch.
     if end_time - last_recorded > granularity:
-        await fetch_missing_data(last_recorded, end_time)
+        await fetch_missing_data(last_recorded, end_time, direction='forward')
 
-    # Also check if we need to extend backwards to reach fetch_days
+    # 2. Extend backward to meet fetch_days if needed
     earliest_recorded = int(df['epoch'].min()) if not df.empty else end_time
     if earliest_recorded > start_time:
-        await fetch_missing_data(start_time, earliest_recorded)
+        await fetch_missing_data(start_time, earliest_recorded, direction='backward')
 
     await api.disconnect()
-    sys.stderr.write(f"Completed incremental update for {symbol}. Total: {len(df)}\n")
+    sys.stderr.write(f"Completed incremental update for {symbol}. Total: {len(df)} candles.\n")
     return df
 
 async def main():

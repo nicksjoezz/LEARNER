@@ -23,6 +23,7 @@ class TradingBot:
         self.active_contracts = {} # contract_id -> {'side', 'entry_time', 'stake'}
         self.log_history = []
         self.max_logs = 100
+        self.history_df = pd.DataFrame()
         self.current_symbol = ""
         self.ohlc_subscription = None
 
@@ -113,6 +114,7 @@ class TradingBot:
         self.log_history = []
         self.active_contracts = {}
         self.last_candle_epoch = 0
+        self.history_df = pd.DataFrame()
 
     async def start(self, config):
         self.reset_metrics()
@@ -120,29 +122,32 @@ class TradingBot:
         self.is_running = True
         self.current_symbol = config['symbol']
         if await self.connect():
-            # Initial history fetch to set the last candle epoch
-            await self.initialize_last_candle_epoch()
+            # Initial history fetch (500 candles for indicators)
+            await self.fetch_initial_history()
             # Start OHLC subscription
             self.main_task = asyncio.create_task(self.ohlc_subscription_loop())
         else:
             self.is_running = False
             self.update_status()
 
-    async def initialize_last_candle_epoch(self):
+    async def fetch_initial_history(self):
         symbol = self.config['symbol']
+        self.log(f"Fetching initial historical data for {symbol} (500 candles)...")
         try:
             response = await self.api.ticks_history({
                 'ticks_history': symbol,
                 'end': 'latest',
-                'count': 1,
+                'count': 500,
                 'granularity': 300,
                 'style': 'candles'
             })
-            if 'candles' in response and response['candles']:
-                self.last_candle_epoch = response['candles'][-1]['epoch']
-                self.log(f"Initialized last candle epoch to {time.ctime(self.last_candle_epoch)}")
+            if 'candles' in response:
+                self.history_df = pd.DataFrame(response['candles'])
+                # Last candle is usually the building one
+                self.last_candle_epoch = self.history_df.iloc[-1]['epoch']
+                self.log(f"Initial history loaded: {len(self.history_df)} candles.")
         except Exception as e:
-            self.log(f"Error initializing candle epoch: {e}")
+            self.log(f"Error fetching initial history: {e}")
 
     async def stop(self):
         self.is_running = False
@@ -189,16 +194,52 @@ class TradingBot:
             ohlc = data['ohlc']
             candle_epoch = int(ohlc['open_time'])
 
-            # Check if this is a new candle
+            # Detect new candle (candle closed)
             if candle_epoch > self.last_candle_epoch:
                 self.log(f"CANDLE CLOSED: {time.ctime(self.last_candle_epoch)}")
+
+                # The closed candle data should be updated in history_df
+                # Deriv OHLC updates are for the building candle.
+                # So the one that just 'closed' is actually the previous building one.
+                # To be absolutely sure, we trigger an update of the history buffer.
+                asyncio.create_task(self.update_history_and_check_signals(candle_epoch))
                 self.last_candle_epoch = candle_epoch
-                # Trigger an async task to refresh history and check signals
-                asyncio.create_task(self.check_signals())
+
+    async def update_history_and_check_signals(self, new_candle_epoch):
+        # Brief delay to allow backend to finalize history
+        await asyncio.sleep(1)
+
+        symbol = self.config['symbol']
+        try:
+            # We only need the latest completed candle to update our buffer
+            response = await self.api.ticks_history({
+                'ticks_history': symbol,
+                'end': 'latest',
+                'count': 2, # current building + previous closed
+                'granularity': 300,
+                'style': 'candles'
+            })
+
+            if 'candles' in response and len(response['candles']) >= 2:
+                latest_closed_candle = response['candles'][0]
+
+                # Append to history_df
+                new_row = pd.DataFrame([latest_closed_candle])
+                self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch']).sort_values('epoch')
+
+                # Keep buffer size to 500
+                if len(self.history_df) > 500:
+                    self.history_df = self.history_df.iloc[-500:]
+
+                # Check Signals on the buffer
+                await self.check_signals()
+        except Exception as e:
+            self.log(f"Error updating history buffer: {e}")
 
     async def check_signals(self):
-        # A short delay to allow the backend to finalize the previous candle
-        await asyncio.sleep(1)
+        if len(self.history_df) < 200:
+            self.log(f"Buffer insufficient ({len(self.history_df)} candles). Need at least 200.")
+            return
 
         symbol = self.config['symbol']
         strategy_idx = int(self.config['strategy'])
@@ -210,21 +251,8 @@ class TradingBot:
         a, c = strat_params[strategy_idx-1]
 
         try:
-            # Refresh history to get the latest completed candle
-            response = await self.api.ticks_history({
-                'ticks_history': symbol,
-                'end': 'latest',
-                'count': 500,
-                'granularity': 300,
-                'style': 'candles'
-            })
-
-            if 'candles' not in response or not response['candles']:
-                return
-
-            df = pd.DataFrame(response['candles'])
-            # Last candle in ticks_history is building, we want the one before it
-            df_calc = df.iloc[:-1].copy() # Exclude the building candle
+            # Use in-memory history_df for calculations
+            df_calc = self.history_df.copy()
             df_calc = add_indicators(df_calc)
             df_ut = ut_bot(df_calc, a=a, c=c)
 
@@ -234,9 +262,9 @@ class TradingBot:
 
             if buy_triggered or sell_triggered:
                 side = 'BUY' if buy_triggered else 'SELL'
-                self.log(f"Signal found: {side}. Verifying with Neural Filter...")
+                self.log(f"Signal found: {side}. Verifying with Neural Filter (Symbol: {symbol} Strategy: {strategy_idx})...")
 
-                # ML Filter verification
+                # ML Filter verification using freshly (re)trained model
                 ml = await self.get_ml_filter(symbol, strategy_idx)
                 if ml:
                     df_ml = ml.filter_signals(df_ut)
@@ -247,17 +275,17 @@ class TradingBot:
                     else:
                         self.log(f"NEURAL FILTER: SIGNAL BLOCKED (Low probability).")
                 else:
-                    self.log(f"ML filter missing. Executing raw {side} trade.")
+                    self.log(f"ML filter missing or training. Executing raw {side} trade.")
                     await self.place_trade('CALL' if buy_triggered else 'PUT')
             else:
                 self.log("No signal found.")
 
         except Exception as e:
-            self.log(f"Error checking signals: {e}")
+            self.log(f"Error during signal check: {e}")
 
     async def place_trade(self, side):
         try:
-            # Check for existing active trades for this symbol
+            # Avoid double entry
             if any(c['side'] == side for c in self.active_contracts.values()):
                 self.log(f"Already have an active {side} trade. Skipping.")
                 return
@@ -297,5 +325,4 @@ class TradingBot:
             self.log(f"Trade placement error: {e}")
 
     async def main_loop(self):
-        # This bot uses ohlc_subscription_loop instead
         pass

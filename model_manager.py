@@ -19,7 +19,6 @@ class ModelManager:
     def log(self, message):
         full_msg = f"[ModelManager] {message}"
         logging.info(full_msg)
-        # Ensure it appears in terminal/logs
         if self.socketio:
             self.socketio.emit('log', f"[System] {message}")
             self.socketio.emit('training_progress', {'message': message})
@@ -40,72 +39,18 @@ class ModelManager:
         self.log("Disk initialization complete.")
 
     async def startup_sync(self):
-        """Ensures data is current and missing models are trained."""
+        """Ensures data is current and retrains all models."""
         self.is_initial_training = True
-        self.log("Starting startup data synchronization...")
-        from fetch_data import update_symbol_data
-
-        for symbol in self.symbols:
-            self.log(f"Syncing market data for {symbol}...")
-            try:
-                await update_symbol_data(symbol, data_dir=self.data_dir)
-            except Exception as e:
-                self.log(f"Failed to sync data for {symbol}: {e}")
-                continue
-
-            filepath = os.path.join(self.data_dir, f"{symbol}_5m_2y.csv")
-            if not os.path.exists(filepath):
-                self.log(f"Data file for {symbol} not found after sync.")
-                continue
-
-            try:
-                df_raw = pd.read_csv(filepath)
-                df = add_indicators(df_raw)
-                del df_raw # Clear raw data from memory
-                gc.collect()
-
-                for i in range(len(self.strat_params)):
-                    strat_idx = i + 1
-                    if self.get_model_status(symbol, strat_idx) == 'pending':
-                        self.log(f"Training model: {symbol} Strat {strat_idx}...")
-                        a, c = self.strat_params[i]
-
-                        # Apply UT Bot and get trades
-                        df_ut = ut_bot(df, a=a, c=c)
-                        raw_trades = Backtester(df_ut).run()
-                        del df_ut # Clear temporary signals DF
-
-                        if len(raw_trades) >= 200:
-                            ml = MLFilter()
-                            if ml.train(df, raw_trades):
-                                ml.save(os.path.join(self.model_dir, f"{symbol}_strat_{strat_idx}.pkl"))
-                                self.models[symbol][strat_idx] = {'model': ml, 'status': 'ready'}
-                                self.log(f"Model {symbol} Strat {strat_idx} ready.")
-                            else:
-                                self.models[symbol][strat_idx] = {'status': 'failed'}
-                                self.log(f"Model {symbol} Strat {strat_idx} training failed.")
-                        else:
-                            self.models[symbol][strat_idx] = {'status': 'bypassed'}
-                            self.log(f"Model {symbol} Strat {strat_idx} bypassed (not enough trades: {len(raw_trades)}).")
-
-                        del raw_trades
-                        gc.collect()
-
-                del df # Clear indicator DF for this symbol
-                gc.collect()
-            except Exception as e:
-                self.log(f"Error processing {symbol}: {e}")
-
+        self.log("Starting startup data synchronization and retraining...")
+        await self.train_all_models()
         self.is_initial_training = False
-        self.last_trained = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
         if self.socketio:
             self.socketio.emit('training_complete', {'status': 'success'})
-        self.log(f"Startup synchronization finished at {self.last_trained}. All systems ready.")
 
     async def train_all_models(self):
-        """Full retraining for daily update."""
+        """Full retraining for daily update or startup."""
         start_time = datetime.utcnow()
-        self.log(f"Commencing daily retraining cycle at {start_time.strftime('%H:%M:%S UTC')}...")
+        self.log(f"Commencing retraining cycle at {start_time.strftime('%H:%M:%S UTC')}...")
         from fetch_data import update_symbol_data
 
         for symbol in self.symbols:
@@ -117,14 +62,23 @@ class ModelManager:
                 continue
 
             filepath = os.path.join(self.data_dir, f"{symbol}_5m_2y.csv")
-            if not os.path.exists(filepath): continue
+            if not os.path.exists(filepath):
+                self.log(f"Data file for {symbol} not found.")
+                continue
 
             self.log(f"Step 2/2: Retraining all {symbol} strategies...")
             try:
                 df_raw = pd.read_csv(filepath)
+                # Ensure we only use the requested number of days from config.json
+                from fetch_data import load_fetch_config
+                fetch_days, _ = load_fetch_config()
+                cutoff_ts = int((datetime.now() - timedelta(days=fetch_days)).timestamp())
+                df_raw = df_raw[df_raw['epoch'] >= cutoff_ts]
+
                 first_candle = datetime.fromtimestamp(df_raw['epoch'].min())
                 last_candle = datetime.fromtimestamp(df_raw['epoch'].max())
-                self.log(f"Training on range: {first_candle} to {last_candle} ({len(df_raw)} candles)")
+                self.log(f"Training {symbol} on range: {first_candle} to {last_candle} ({len(df_raw)} candles)")
+
                 df = add_indicators(df_raw)
                 del df_raw
                 gc.collect()
@@ -141,12 +95,13 @@ class ModelManager:
                         if ml.train(df, raw_trades):
                             ml.save(os.path.join(self.model_dir, f"{symbol}_strat_{strat_idx}.pkl"))
                             self.models[symbol][strat_idx] = {'model': ml, 'status': 'ready'}
+                            self.log(f"Model {symbol} Strat {strat_idx} retrained successfully.")
                         else:
+                            self.log(f"Model {symbol} Strat {strat_idx} training failed.")
                             if not self.get_model(symbol, strat_idx):
                                  self.models[symbol][strat_idx]['status'] = 'failed'
-                            else:
-                                 self.models[symbol][strat_idx]['status'] = 'ready'
                     else:
+                        self.log(f"Model {symbol} Strat {strat_idx} bypassed (insufficient trades).")
                         self.models[symbol][strat_idx]['status'] = 'bypassed'
 
                     del raw_trades
@@ -155,10 +110,10 @@ class ModelManager:
                 del df
                 gc.collect()
             except Exception as e:
-                self.log(f"Error during daily retraining for {symbol}: {e}")
+                self.log(f"Error during retraining for {symbol}: {e}")
 
         self.last_trained = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
-        self.log(f"Daily retraining cycle complete at {self.last_trained}.")
+        self.log(f"Retraining cycle complete at {self.last_trained}.")
 
     def get_model_status(self, symbol, strategy_idx):
         return self.models.get(symbol, {}).get(int(strategy_idx), {}).get('status', 'pending')
@@ -172,6 +127,7 @@ class ModelManager:
         await self.startup_sync()
         while True:
             now = datetime.utcnow()
+            # Retrain daily at 00:05 UTC
             next_run = (now + timedelta(days=1)).replace(hour=0, minute=5, second=0)
             wait = (next_run - now).total_seconds()
             if wait <= 0: wait = 86400

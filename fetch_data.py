@@ -105,7 +105,11 @@ async def update_symbol_data(symbol, data_dir='data'):
     if earliest_recorded > start_time:
         await fetch_missing_data(start_time, earliest_recorded, direction='backward')
 
-    await api.disconnect()
+    try:
+        await asyncio.wait_for(api.disconnect(), timeout=10)
+    except:
+        pass
+
     sys.stderr.write(f"Completed incremental update for {symbol}. Total: {len(df)} candles.\n")
     return df
 

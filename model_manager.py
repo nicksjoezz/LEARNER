@@ -44,9 +44,11 @@ class ModelManager:
         self.load_metadata()
         for symbol in self.symbols:
             self.models[symbol] = {}
+            symbol_dir = os.path.join(self.model_dir, symbol)
+            os.makedirs(symbol_dir, exist_ok=True)
             for i in range(len(self.strat_params)):
                 strat_idx = i + 1
-                model_path = os.path.join(self.model_dir, f"{symbol}_strat_{strat_idx}.pkl")
+                model_path = os.path.join(symbol_dir, f"{symbol}_strat_{strat_idx}.pkl")
                 ml = MLFilter()
                 if ml.load(model_path):
                     self.models[symbol][strat_idx] = {'model': ml, 'status': 'ready'}
@@ -106,7 +108,9 @@ class ModelManager:
                                 if len(raw_trades) >= 200:
                                     ml = MLFilter()
                                     if ml.train(df, raw_trades):
-                                        ml.save(os.path.join(self.model_dir, f"{symbol}_strat_{strat_idx}.pkl"))
+                                        symbol_dir = os.path.join(self.model_dir, symbol)
+                                        os.makedirs(symbol_dir, exist_ok=True)
+                                        ml.save(os.path.join(symbol_dir, f"{symbol}_strat_{strat_idx}.pkl"))
                                         self.models[symbol][strat_idx] = {'model': ml, 'status': 'ready'}
                                 del raw_trades
                                 gc.collect()
@@ -157,7 +161,9 @@ class ModelManager:
                     if len(raw_trades) >= 200:
                         ml = MLFilter()
                         if ml.train(df, raw_trades):
-                            ml.save(os.path.join(self.model_dir, f"{symbol}_strat_{strat_idx}.pkl"))
+                            symbol_dir = os.path.join(self.model_dir, symbol)
+                            os.makedirs(symbol_dir, exist_ok=True)
+                            ml.save(os.path.join(symbol_dir, f"{symbol}_strat_{strat_idx}.pkl"))
                             self.models[symbol][strat_idx] = {'model': ml, 'status': 'ready'}
                     del raw_trades
                     gc.collect()

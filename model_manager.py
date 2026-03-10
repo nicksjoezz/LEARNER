@@ -56,8 +56,8 @@ class ModelManager:
                     self.models[symbol][strat_idx] = {'status': 'pending'}
         self.log("Disk initialization complete.")
 
-    async def train_symbol(self, symbol, only_pending=False):
-        """Trains models for a single symbol."""
+    def _train_symbol_sync(self, symbol, only_pending=False):
+        """Synchronous method to train models for a single symbol, meant to be run in a thread."""
         filepath = os.path.join(self.data_dir, f"{symbol}_5m_2y.csv")
         if not os.path.exists(filepath):
             self.log(f"No data file for {symbol}, skipping training.")
@@ -103,6 +103,11 @@ class ModelManager:
         except Exception as e:
             self.log(f"Error training {symbol}: {e}")
 
+    async def train_symbol(self, symbol, only_pending=False):
+        """Asynchronously triggers training for a single symbol using a separate thread."""
+        # Use asyncio.to_thread to run the CPU-intensive training without blocking the event loop
+        await asyncio.to_thread(self._train_symbol_sync, symbol, only_pending)
+
     async def startup_sync(self):
         """Startup synchronization: ensures data is current and decides if retraining is needed."""
         self.is_initial_training = True
@@ -121,20 +126,22 @@ class ModelManager:
 
         training_tasks = []
 
-        # Process symbols one by one for fetching
+        # Process symbols one by one for fetching to respect rate limits
         for symbol in self.symbols:
-            self.log(f"Syncing market data for {symbol}...")
+            self.log(f"Processing {symbol}: Syncing market data...")
             try:
+                # Sequential fetching
                 await update_symbol_data(symbol, data_dir=self.data_dir)
-                self.log(f"Data sync complete for {symbol}. Starting background training...")
+                self.log(f"Data sync complete for {symbol}. Triggering background training...")
 
                 # Start training in background immediately after fetch finishes for this symbol
+                # We use asyncio.create_task which will run train_symbol (which uses to_thread)
                 task = asyncio.create_task(self.train_symbol(symbol, only_pending=not should_retrain))
                 training_tasks.append(task)
             except Exception as e:
-                self.log(f"Failed to sync data for {symbol}: {e}")
+                self.log(f"Failed to process {symbol}: {e}")
 
-        # Wait for all background training to complete
+        # Wait for all background training to complete before marking as finished
         if training_tasks:
             self.log(f"Waiting for {len(training_tasks)} symbols to finish training...")
             await asyncio.gather(*training_tasks)

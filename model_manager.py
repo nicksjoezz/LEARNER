@@ -59,7 +59,7 @@ class ModelManager:
     async def startup_sync(self):
         """Startup synchronization: ensures data is current and decides if retraining is needed."""
         self.is_initial_training = True
-        self.log("Starting startup data synchronization...")
+        self.log("Starting startup data synchronization... Please wait, this may take a few minutes.")
         from fetch_data import update_symbol_data
 
         # 1. Update historical data for all symbols

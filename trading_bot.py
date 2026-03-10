@@ -240,43 +240,29 @@ class TradingBot:
             ohlc = data['ohlc']
             candle_epoch = int(ohlc['open_time'])
 
+            # Real-time update of history_df
+            new_candle = {
+                'epoch': int(ohlc['open_time']),
+                'open': float(ohlc['open']),
+                'high': float(ohlc['high']),
+                'low': float(ohlc['low']),
+                'close': float(ohlc['close'])
+            }
+            new_row = pd.DataFrame([new_candle])
+            self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch')
+            if len(self.history_df) > 500:
+                self.history_df = self.history_df.iloc[-500:]
+
             # Detect new candle (candle closed)
             if candle_epoch > self.last_candle_epoch:
                 if self.last_candle_epoch != 0:
                     self.log(f"CANDLE CLOSED: {time.ctime(self.last_candle_epoch)}")
-                    asyncio.create_task(self.update_history_and_check_signals(candle_epoch))
+                    # Trigger signal check immediately
+                    asyncio.create_task(self.check_signals())
                 else:
                     self.log(f"Bot session active. Current candle open time: {time.ctime(candle_epoch)}")
                 self.last_candle_epoch = candle_epoch
 
-    async def update_history_and_check_signals(self, new_candle_epoch):
-        # Brief delay to allow backend to finalize history
-        await asyncio.sleep(2)
-
-        symbol = self.config['symbol']
-        try:
-            # Fetch last few candles to ensure we have the closed one and the new building one
-            response = await self.api.ticks_history({
-                'ticks_history': symbol,
-                'end': 'latest',
-                'count': 5,
-                'granularity': 300,
-                'style': 'candles'
-            })
-
-            if 'candles' in response:
-                df_new = pd.DataFrame(response['candles'])
-                self.history_df = pd.concat([self.history_df, df_new]).drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch')
-
-                if len(self.history_df) > 500:
-                    self.history_df = self.history_df.iloc[-500:]
-
-                self.log(f"History buffer updated for {symbol}. Last closed candle: {time.ctime(int(self.history_df.iloc[-2]['epoch']))}")
-                await self.check_signals()
-            else:
-                self.log(f"Warning: No candles in history update response for {symbol}")
-        except Exception as e:
-            self.log(f"Error updating history buffer: {e}")
 
     async def check_signals(self):
         if len(self.history_df) < 200:

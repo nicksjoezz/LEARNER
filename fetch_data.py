@@ -5,21 +5,12 @@ import os
 import json
 from datetime import datetime, timedelta
 import sys
-
-CONFIG_FILE = 'config.json'
-
-def load_fetch_config():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                config = json.load(f)
-                return int(config.get('fetch_days', 730)), config.get('app_id', '62845')
-        except:
-            pass
-    return 730, '62845'
+from config_utils import load_config
 
 async def update_symbol_data(symbol, data_dir='data'):
-    fetch_days, app_id = load_fetch_config()
+    config = load_config()
+    fetch_days = int(config.get('fetch_days', 365))
+    app_id = config.get('app_id')
     filepath = os.path.join(data_dir, f"{symbol}_5m_2y.csv")
     granularity = 300
     os.makedirs(data_dir, exist_ok=True)

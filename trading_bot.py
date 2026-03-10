@@ -60,7 +60,7 @@ class TradingBot:
                     pass
                 self.api = None
 
-            app_id = self.config.get('app_id', '62845')
+            app_id = self.config.get('app_id')
             self.log(f"Connecting to Deriv API (App ID: {app_id})...")
             self.api = DerivAPI(app_id=app_id)
 

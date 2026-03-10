@@ -56,21 +56,60 @@ class ModelManager:
                     self.models[symbol][strat_idx] = {'status': 'pending'}
         self.log("Disk initialization complete.")
 
+    async def train_symbol(self, symbol, only_pending=False):
+        """Trains models for a single symbol."""
+        filepath = os.path.join(self.data_dir, f"{symbol}_5m_2y.csv")
+        if not os.path.exists(filepath):
+            self.log(f"No data file for {symbol}, skipping training.")
+            return
+
+        try:
+            self.log(f"Loading data for {symbol} training...")
+            df_raw = pd.read_csv(filepath)
+            from config_utils import load_config
+            config = load_config()
+            fetch_days = int(config.get('fetch_days', 365))
+            cutoff_ts = int((datetime.now() - timedelta(days=fetch_days)).timestamp())
+            df_raw = df_raw[df_raw['epoch'] >= cutoff_ts]
+
+            df = add_indicators(df_raw)
+            del df_raw
+            gc.collect()
+
+            for i, (a, c) in enumerate(self.strat_params):
+                strat_idx = i + 1
+                if only_pending and self.get_model_status(symbol, strat_idx) == 'ready':
+                    continue
+
+                self.log(f"Training: {symbol} Strat {strat_idx}...")
+                df_ut = ut_bot(df, a=a, c=c)
+                raw_trades = Backtester(df_ut).run()
+                del df_ut
+
+                if len(raw_trades) >= 200:
+                    ml = MLFilter()
+                    if ml.train(df, raw_trades):
+                        symbol_dir = os.path.join(self.model_dir, symbol)
+                        os.makedirs(symbol_dir, exist_ok=True)
+                        ml.save(os.path.join(symbol_dir, f"{symbol}_strat_{strat_idx}.pkl"))
+                        self.models[symbol][strat_idx] = {'model': ml, 'status': 'ready'}
+                else:
+                    self.log(f"Insufficient trades ({len(raw_trades)}) for {symbol} Strat {strat_idx}")
+                del raw_trades
+                gc.collect()
+            del df
+            gc.collect()
+            self.log(f"Finished training all strategies for {symbol}.")
+        except Exception as e:
+            self.log(f"Error training {symbol}: {e}")
+
     async def startup_sync(self):
         """Startup synchronization: ensures data is current and decides if retraining is needed."""
         self.is_initial_training = True
-        self.log("Starting startup data synchronization... Please wait, this may take a few minutes.")
+        self.log("Starting startup data synchronization... Please wait.")
         from fetch_data import update_symbol_data
 
-        # 1. Update historical data for all symbols
-        for symbol in self.symbols:
-            self.log(f"Syncing market data for {symbol}...")
-            try:
-                await update_symbol_data(symbol, data_dir=self.data_dir)
-            except Exception as e:
-                self.log(f"Failed to sync data for {symbol}: {e}")
-
-        # 2. Check if a full retrain is needed (missing or > 24hrs)
+        # Check if a full retrain is needed (missing or > 24hrs)
         should_retrain = True
         if self.last_trained:
             try:
@@ -80,97 +119,52 @@ class ModelManager:
                     self.log(f"Last training was at {self.last_trained} (Less than 24h ago). Skipping full retrain.")
             except: pass
 
+        training_tasks = []
+
+        # Process symbols one by one for fetching
+        for symbol in self.symbols:
+            self.log(f"Syncing market data for {symbol}...")
+            try:
+                await update_symbol_data(symbol, data_dir=self.data_dir)
+                self.log(f"Data sync complete for {symbol}. Starting background training...")
+
+                # Start training in background immediately after fetch finishes for this symbol
+                task = asyncio.create_task(self.train_symbol(symbol, only_pending=not should_retrain))
+                training_tasks.append(task)
+            except Exception as e:
+                self.log(f"Failed to sync data for {symbol}: {e}")
+
+        # Wait for all background training to complete
+        if training_tasks:
+            self.log(f"Waiting for {len(training_tasks)} symbols to finish training...")
+            await asyncio.gather(*training_tasks)
+
         if should_retrain:
-            self.log("Triggering full retraining cycle...")
-            await self.train_all_models()
-        else:
-            # Only train missing models
-            for symbol in self.symbols:
-                filepath = os.path.join(self.data_dir, f"{symbol}_5m_2y.csv")
-                if not os.path.exists(filepath): continue
-
-                needs_training = any(self.get_model_status(symbol, i+1) == 'pending' for i in range(len(self.strat_params)))
-                if needs_training:
-                    try:
-                        df_raw = pd.read_csv(filepath)
-                        df = add_indicators(df_raw)
-                        del df_raw
-                        gc.collect()
-
-                        for i in range(len(self.strat_params)):
-                            strat_idx = i + 1
-                            if self.get_model_status(symbol, strat_idx) == 'pending':
-                                self.log(f"Training missing model: {symbol} Strat {strat_idx}...")
-                                a, c = self.strat_params[i]
-                                df_ut = ut_bot(df, a=a, c=c)
-                                raw_trades = Backtester(df_ut).run()
-                                del df_ut
-                                if len(raw_trades) >= 200:
-                                    ml = MLFilter()
-                                    if ml.train(df, raw_trades):
-                                        symbol_dir = os.path.join(self.model_dir, symbol)
-                                        os.makedirs(symbol_dir, exist_ok=True)
-                                        ml.save(os.path.join(symbol_dir, f"{symbol}_strat_{strat_idx}.pkl"))
-                                        self.models[symbol][strat_idx] = {'model': ml, 'status': 'ready'}
-                                del raw_trades
-                                gc.collect()
-                        del df
-                        gc.collect()
-                    except Exception as e:
-                        self.log(f"Error training missing models for {symbol}: {e}")
+            self.last_trained = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+            self.save_metadata()
 
         self.is_initial_training = False
         if self.socketio:
             self.socketio.emit('training_complete', {'status': 'success'})
-        self.log(f"Startup synchronization finished.")
+        self.log(f"Startup synchronization and training finished.")
 
     async def train_all_models(self):
         """Full retraining cycle."""
         self.log(f"Commencing full retraining cycle...")
         from fetch_data import update_symbol_data
 
+        training_tasks = []
         for symbol in self.symbols:
             self.log(f"Updating historical data for {symbol}...")
             try:
                 await update_symbol_data(symbol, data_dir=self.data_dir)
+                task = asyncio.create_task(self.train_symbol(symbol, only_pending=False))
+                training_tasks.append(task)
             except Exception as e:
                 self.log(f"Failed to sync data for {symbol}: {e}")
-                continue
 
-            filepath = os.path.join(self.data_dir, f"{symbol}_5m_2y.csv")
-            if not os.path.exists(filepath): continue
-
-            try:
-                df_raw = pd.read_csv(filepath)
-                from fetch_data import load_fetch_config
-                fetch_days, _ = load_fetch_config()
-                cutoff_ts = int((datetime.now() - timedelta(days=fetch_days)).timestamp())
-                df_raw = df_raw[df_raw['epoch'] >= cutoff_ts]
-
-                df = add_indicators(df_raw)
-                del df_raw
-                gc.collect()
-
-                for i, (a, c) in enumerate(self.strat_params):
-                    strat_idx = i + 1
-                    self.log(f"Retraining: {symbol} Strat {strat_idx}...")
-                    df_ut = ut_bot(df, a=a, c=c)
-                    raw_trades = Backtester(df_ut).run()
-                    del df_ut
-
-                    if len(raw_trades) >= 200:
-                        ml = MLFilter()
-                        if ml.train(df, raw_trades):
-                            symbol_dir = os.path.join(self.model_dir, symbol)
-                            os.makedirs(symbol_dir, exist_ok=True)
-                            ml.save(os.path.join(symbol_dir, f"{symbol}_strat_{strat_idx}.pkl"))
-                            self.models[symbol][strat_idx] = {'model': ml, 'status': 'ready'}
-                    del raw_trades
-                    gc.collect()
-                del df
-                gc.collect()
-            except Exception as e:
-                self.log(f"Error during retraining for {symbol}: {e}")
+        if training_tasks:
+            await asyncio.gather(*training_tasks)
 
         self.last_trained = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
         self.save_metadata()

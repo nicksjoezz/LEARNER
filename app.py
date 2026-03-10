@@ -10,28 +10,12 @@ from model_manager import model_manager
 from deriv_api import DerivAPI
 from strategy_utils import ut_bot, Backtester, calculate_max_consecutive_losses, simulate_financials
 from indicators import add_indicators
+from config_utils import load_config, save_config
 
 app = Flask(__name__)
 # Standard Flask-SocketIO initialization
 socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 bot = TradingBot(socketio)
-CONFIG_FILE = 'config.json'
-
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                data = json.load(f)
-                # Ensure all keys exist
-                defaults = {"api_token": "", "app_id": "99999", "symbol": "R_100", "strategy": "1", "trade_pc": 1, "fetch_days": 730}
-                for k, v in defaults.items():
-                    if k not in data: data[k] = v
-                return data
-        except: pass
-    return {"api_token": "", "app_id": "99999", "symbol": "R_100", "strategy": "1", "trade_pc": 1, "fetch_days": 730}
-
-def save_config(config):
-    with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=4)
 
 @app.route('/')
 def index(): return render_template('index.html')
@@ -75,7 +59,7 @@ async def get_bt_data(symbol, days):
         except: pass
 
     c = load_config()
-    api = DerivAPI(app_id=c.get('app_id', '99999'))
+    api = DerivAPI(app_id=c.get('app_id'))
     end, candles = int(datetime.now().timestamp()), []
     curr = end
     while curr > ts:

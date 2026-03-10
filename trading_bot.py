@@ -52,6 +52,14 @@ class TradingBot:
 
     async def connect(self):
         try:
+            if self.api:
+                self.log("Cleaning up existing API connection...")
+                try:
+                    await asyncio.wait_for(self.api.disconnect(), timeout=5)
+                except:
+                    pass
+                self.api = None
+
             app_id = self.config.get('app_id', '62845')
             self.log(f"Connecting to Deriv API (App ID: {app_id})...")
             self.api = DerivAPI(app_id=app_id)

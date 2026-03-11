@@ -10,6 +10,7 @@ class ModelManager:
         self.models = {}
         self.last_trained = None
         self.is_initial_training = False
+        self.training_lock = asyncio.Lock()
         self.symbols = ['R_100', 'R_75', 'R_50', 'R_25', 'R_10']
         self.strat_params = [(1, 10), (2, 20), (3, 30), (1, 20), (2, 10), (3, 20), (1, 30), (2, 30), (3, 10), (1.5, 15)]
         self.data_dir, self.model_dir = 'data', 'models'
@@ -110,7 +111,11 @@ class ModelManager:
 
     async def startup_sync(self):
         """Startup synchronization: ensures data is current and decides if retraining is needed."""
-        self.is_initial_training = True
+        async with self.training_lock:
+            if self.is_initial_training:
+                return
+            self.is_initial_training = True
+
         self.log("Starting startup data synchronization... Please wait.")
         from fetch_data import update_symbol_data
 

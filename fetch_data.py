@@ -29,27 +29,33 @@ async def update_symbol_data(symbol, data_dir='data'):
 
     api = DerivAPI(app_id=app_id)
 
-    async def fetch_range(current_start, current_end, direction='backward'):
+    async def fetch_range(current_start, current_end):
         nonlocal df
-        while (direction == 'backward' and current_end > current_start) or \
-              (direction == 'forward' and current_start < current_end):
+        while current_end > current_start:
+            # Check for existing data block to jump over
+            if not df.empty:
+                existing_candles = df[(df['epoch'] <= current_end) & (df['epoch'] >= current_start)]
+                if not existing_candles.empty:
+                    # If current_end is already covered, jump to the start of this block
+                    latest_in_range = existing_candles['epoch'].max()
+                    if latest_in_range >= current_end - granularity:
+                        new_end = existing_candles['epoch'].min() - 1
+                        if new_end <= current_start:
+                            break
+                        current_end = new_end
+                        continue
 
-            # For Deriv API 'ticks_history':
-            # 'end' is the latest time we want
-            # 'count' is how many candles to fetch *before* 'end'
-            sys.stderr.write(f"[{symbol}] Fetching {direction} gap. Target: {datetime.fromtimestamp(current_start if direction == 'backward' else current_end)}\n")
+            sys.stderr.write(f"[{symbol}] Syncing gap ending at {datetime.fromtimestamp(current_end)}\n")
 
             try:
-                params = {
+                response = await api.ticks_history({
                     'ticks_history': symbol,
                     'end': str(current_end),
                     'adjust_start_time': 1,
                     'count': 5000,
                     'granularity': granularity,
                     'style': 'candles'
-                }
-
-                response = await api.ticks_history(params)
+                })
 
                 if 'error' in response:
                     err = response['error']
@@ -61,63 +67,53 @@ async def update_symbol_data(symbol, data_dir='data'):
 
                 candles = response.get('candles', [])
                 if not candles:
-                    sys.stderr.write(f"No more candles available for {symbol}.\n")
+                    sys.stderr.write(f"[{symbol}] No more candles returned from API.\n")
                     break
 
+                num_received = len(candles)
                 df_new = pd.DataFrame(candles)
-                df = pd.concat([df, df_new]).drop_duplicates(subset=['epoch']).sort_values('epoch')
 
-                # Immediate filtering to keep only what's needed
-                cutoff = int((datetime.utcnow() - timedelta(days=fetch_days + 1)).timestamp())
-                df = df[df['epoch'] >= cutoff]
+                # Filter out candles we already have
+                if not df.empty:
+                    df_new = df_new[~df_new['epoch'].isin(df['epoch'])]
 
-                # SAVE REAL-TIME
-                df.to_csv(filepath, index=False)
+                num_new = len(df_new)
+                if not df_new.empty:
+                    df = pd.concat([df, df_new]).drop_duplicates(subset=['epoch']).sort_values('epoch')
+                    # Immediate filtering to keep only what's needed
+                    cutoff = int((datetime.utcnow() - timedelta(days=fetch_days + 1)).timestamp())
+                    df = df[df['epoch'] >= cutoff]
+                    # SAVE REAL-TIME
+                    df.to_csv(filepath, index=False)
+                    sys.stderr.write(f"[{symbol}] Saved {num_new} new candles ({num_received} total in batch).\n")
+                else:
+                    sys.stderr.write(f"[{symbol}] Batch contained no new data.\n")
 
                 batch_earliest = int(candles[0]['epoch'])
-                batch_latest = int(candles[-1]['epoch'])
+                if batch_earliest <= current_start:
+                    break
+                current_end = batch_earliest - 1
 
-                if direction == 'backward':
-                    if batch_earliest <= current_start:
-                        break
-                    current_end = batch_earliest - 1
-                else: # forward
-                    # Forward fetching with 'end' as moving target:
-                    # We always fetch up to the latest known 'now_ts'.
-                    # If the earliest candle in our batch is already in our df, we've caught up.
-                    if batch_latest >= current_end:
-                        break
-                    # To fetch "forward", we actually move 'end' to 'now_ts' but we only do it once?
-                    # No, the API 'end' is the UPPER bound.
-                    # If we already have up to 'batch_latest', and we want to reach 'now_ts',
-                    # we should actually be using 'start' if we wanted true forward,
-                    # but 'ticks_history' is easier with 'end' and 'count'.
-                    # Let's just use the 'backward' logic to fill gaps from 'now_ts' down to 'last_recorded'.
-                    if batch_earliest <= current_start:
-                        break
-                    current_end = batch_earliest - 1
-
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
 
             except Exception as e:
-                sys.stderr.write(f"Fetch error: {e}. Retrying in 10s...\n")
-                await asyncio.sleep(10)
-                continue
+                sys.stderr.write(f"Fetch error: {e}. Retrying in 5s...\n")
+                await asyncio.sleep(5)
 
-    # 1. Fill forward gap: From last recorded in CSV up to NOW
+    # 1. Sync forward (from last recorded to now)
     last_recorded = int(df['epoch'].max()) if not df.empty else start_ts
     if now_ts - last_recorded > granularity:
-        sys.stderr.write(f"[{symbol}] Filling forward gap from {datetime.fromtimestamp(last_recorded)} to {datetime.fromtimestamp(now_ts)}\n")
-        await fetch_range(last_recorded, now_ts, direction='forward')
+        sys.stderr.write(f"[{symbol}] Updating to latest data...\n")
+        await fetch_range(last_recorded, now_ts)
 
-    # 2. Fill backward gap: From earliest recorded down to START_TS
+    # 2. Sync backward (from earliest recorded to start_ts)
     earliest_recorded = int(df['epoch'].min()) if not df.empty else now_ts
     if earliest_recorded > start_ts:
-        sys.stderr.write(f"[{symbol}] Filling backward gap from {datetime.fromtimestamp(earliest_recorded)} down to {datetime.fromtimestamp(start_ts)}\n")
-        await fetch_range(start_ts, earliest_recorded, direction='backward')
+        sys.stderr.write(f"[{symbol}] Fetching historical gaps...\n")
+        await fetch_range(start_ts, earliest_recorded)
 
     try:
-        await asyncio.wait_for(api.disconnect(), timeout=10)
+        await asyncio.wait_for(api.disconnect(), timeout=5)
     except:
         pass
 

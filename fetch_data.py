@@ -54,32 +54,48 @@ async def update_symbol_data(symbol, data_dir='data'):
         nonlocal df
         current_end = gap_end
         empty_batches = 0
+        retry_count = 0
+        MAX_RETRIES = 3
 
         while current_end > gap_start:
             sys.stderr.write(f"[{symbol}] Syncing gap: {datetime.utcfromtimestamp(gap_start)} to {datetime.utcfromtimestamp(current_end)}\n")
 
             try:
-                response = await api.ticks_history({
+                response = await asyncio.wait_for(api.ticks_history({
                     'ticks_history': symbol,
                     'end': str(current_end),
                     'adjust_start_time': 1,
                     'count': 5000,
                     'granularity': granularity,
                     'style': 'candles'
-                })
+                }), timeout=30)
 
                 if 'error' in response:
                     err = response['error']
                     sys.stderr.write(f"API Error ({err.get('code')}): {err.get('message')}\n")
+
                     if err.get('code') == 'RateLimit':
                         await asyncio.sleep(60)
                         continue
-                    break
+
+                    retry_count += 1
+                    if retry_count >= MAX_RETRIES:
+                        sys.stderr.write(f"[{symbol}] Max retries reached for segment. Skipping...\n")
+                        current_end -= granularity * 5000 # Skip a large block
+                        retry_count = 0
+                        continue
+
+                    await asyncio.sleep(5)
+                    continue
 
                 candles = response.get('candles', [])
                 if not candles:
-                    sys.stderr.write(f"[{symbol}] No more data available for this gap.\n")
-                    break
+                    sys.stderr.write(f"[{symbol}] No more data returned in this range.\n")
+                    empty_batches += 1
+                    if empty_batches >= 3:
+                        break
+                    current_end -= granularity * 5000
+                    continue
 
                 df_new = pd.DataFrame(candles)
 
@@ -94,6 +110,7 @@ async def update_symbol_data(symbol, data_dir='data'):
                     df.to_csv(filepath, index=False)
                     sys.stderr.write(f"[{symbol}] Added {num_new} new candles.\n")
                     empty_batches = 0
+                    retry_count = 0
                 else:
                     empty_batches += 1
                     sys.stderr.write(f"[{symbol}] Batch contained no new data ({empty_batches}/3).\n")
@@ -109,7 +126,13 @@ async def update_symbol_data(symbol, data_dir='data'):
 
             except Exception as e:
                 sys.stderr.write(f"Fetch error: {e}. Retrying in 5s...\n")
-                await asyncio.sleep(5)
+                retry_count += 1
+                if retry_count >= MAX_RETRIES:
+                    sys.stderr.write(f"[{symbol}] Exception retry limit reached. Skipping range.\n")
+                    current_end -= granularity * 5000
+                    retry_count = 0
+                else:
+                    await asyncio.sleep(5)
 
     # Calculate gaps based on target window
     epochs_list = df['epoch'].tolist() if not df.empty else []

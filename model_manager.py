@@ -133,6 +133,20 @@ class ModelManager:
 
         # Process symbols one by one for fetching to respect rate limits
         for symbol in self.symbols:
+            # Check if we REALLY need to sync this symbol right now
+            needs_sync = should_retrain
+            if not needs_sync:
+                # If any model for this symbol is not ready, we need to sync and train
+                if any(self.get_model_status(symbol, i+1) != 'ready' for i in range(len(self.strat_params))):
+                    needs_sync = True
+                # If data file doesn't exist, we need to sync
+                if not os.path.exists(os.path.join(self.data_dir, f"{symbol}_5m_2y.csv")):
+                    needs_sync = True
+
+            if not needs_sync:
+                self.log(f"Symbol {symbol} is up to date and models are ready. Skipping sync.")
+                continue
+
             self.log(f"Processing {symbol}: Syncing market data...")
             try:
                 # Sequential fetching
@@ -140,7 +154,6 @@ class ModelManager:
                 self.log(f"Data sync complete for {symbol}. Triggering background training...")
 
                 # Start training in background immediately after fetch finishes for this symbol
-                # We use asyncio.create_task which will run train_symbol (which uses to_thread)
                 task = asyncio.create_task(self.train_symbol(symbol, only_pending=not should_retrain))
                 training_tasks.append(task)
             except Exception as e:

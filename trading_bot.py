@@ -26,6 +26,7 @@ class TradingBot:
         self.history_df = pd.DataFrame()
         self.current_symbol = ""
         self.ohlc_subscription = None
+        self.start_lock = asyncio.Lock()
 
     def log(self, message):
         timestamp = time.strftime('%H:%M:%S', time.gmtime())
@@ -131,64 +132,99 @@ class TradingBot:
         self.history_df = pd.DataFrame()
 
     async def start(self, config):
-        self.log(f"Starting bot for {config['symbol']} Strategy {config['strategy']}...")
-        self.reset_metrics()
-        self.config = config
-        self.is_running = True
-        self.current_symbol = config['symbol']
+        async with self.start_lock:
+            if self.is_running:
+                self.log("Bot is already running.")
+                return
 
-        # Ensure model is initialized or wait briefly if retraining
-        strategy_idx = int(config['strategy'])
-        status = model_manager.get_model_status(self.current_symbol, strategy_idx)
-        if status == 'pending' or status == 'training':
-            self.log(f"Model {self.current_symbol} Strat {strategy_idx} is {status}. Fallback to raw signals if not ready.")
+            self.log(f"Starting bot for {config['symbol']} Strategy {config['strategy']}...")
+            self.reset_metrics()
+            self.config = config
+            self.is_running = True
+            self.current_symbol = config['symbol']
 
-        try:
-            if await self.connect():
-                self.log("Connected successfully. Fetching initial history...")
-                # Initial history fetch (500 candles for indicators)
-                await asyncio.wait_for(self.fetch_initial_history(), timeout=60)
+            # Ensure model is initialized or wait briefly if retraining
+            strategy_idx = int(config['strategy'])
+            status = model_manager.get_model_status(self.current_symbol, strategy_idx)
+            if status == 'pending' or status == 'training':
+                self.log(f"Model {self.current_symbol} Strat {strategy_idx} is {status}. Fallback to raw signals if not ready.")
 
-                if self.history_df.empty:
-                    self.log("Failed to fetch initial history. Stopping bot.")
-                    await self.stop()
-                    return
+            try:
+                if await self.connect():
+                    self.log("Connected successfully. Fetching initial history...")
+                    # Initial history fetch (500 candles for indicators)
+                    # Increased timeout and added internal retry logic in fetch_initial_history
+                    await asyncio.wait_for(self.fetch_initial_history(), timeout=120)
 
-                # Start OHLC subscription
-                self.log("Starting OHLC subscription...")
-                self.main_task = asyncio.create_task(self.ohlc_subscription_loop())
-                self.log("Bot initialization complete and running.")
-            else:
-                self.log("Failed to connect to Deriv API.")
+                    if self.history_df.empty:
+                        self.log("Failed to fetch initial history. Stopping bot.")
+                        # We are already holding the lock, but stop() might try to acquire it if we're not careful.
+                        # However, stop() doesn't use the lock in this implementation.
+                        self.is_running = False
+                        if self.api:
+                            await self.api.disconnect()
+                            self.api = None
+                        self.update_status()
+                        return
+
+                    # Start OHLC subscription
+                    self.log("Starting OHLC subscription...")
+                    self.main_task = asyncio.create_task(self.ohlc_subscription_loop())
+                    self.log("Bot initialization complete and running.")
+                else:
+                    self.log("Failed to connect to Deriv API.")
+                    self.is_running = False
+                    self.update_status()
+            except asyncio.TimeoutError:
+                self.log("Initialization timed out.")
+                # Manual cleanup instead of calling self.stop() to avoid recursive lock issues if we added it there
                 self.is_running = False
+                if self.api:
+                    await self.api.disconnect()
+                    self.api = None
                 self.update_status()
-        except asyncio.TimeoutError:
-            self.log("Initialization timed out.")
-            await self.stop()
-        except Exception as e:
-            self.log(f"Error during bot start: {e}")
-            await self.stop()
+            except Exception as e:
+                self.log(f"Error during bot start: {e}")
+                self.is_running = False
+                if self.api:
+                    await self.api.disconnect()
+                    self.api = None
+                self.update_status()
 
     async def fetch_initial_history(self):
         symbol = self.config['symbol']
-        self.log(f"Fetching initial historical data for {symbol} (500 candles)...")
-        try:
-            response = await self.api.ticks_history({
-                'ticks_history': symbol,
-                'end': 'latest',
-                'count': 500,
-                'granularity': 300,
-                'style': 'candles'
-            })
-            if 'candles' in response:
-                self.history_df = pd.DataFrame(response['candles'])
-                # Last candle is usually the building one
-                self.last_candle_epoch = self.history_df.iloc[-1]['epoch']
-                self.log(f"Initial history loaded: {len(self.history_df)} candles. Last candle epoch: {self.last_candle_epoch}")
-            else:
-                self.log(f"Error: No candles returned for {symbol} initial history.")
-        except Exception as e:
-            self.log(f"Error fetching initial history: {e}")
+        # Explicitly fetching fresh data from API as per requirement (No local cache for live trading)
+        self.log(f"Fetching fresh historical data for {symbol} (500 candles) from API...")
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = await asyncio.wait_for(self.api.ticks_history({
+                    'ticks_history': symbol,
+                    'end': 'latest',
+                    'count': 500,
+                    'granularity': 300,
+                    'style': 'candles'
+                }), timeout=30)
+
+                if 'candles' in response:
+                    self.history_df = pd.DataFrame(response['candles'])
+                    # Ensure sorting and unique epochs
+                    self.history_df = self.history_df.drop_duplicates(subset=['epoch']).sort_values('epoch')
+                    # Last candle is usually the building one
+                    self.last_candle_epoch = int(self.history_df.iloc[-1]['epoch'])
+                    self.log(f"Initial history loaded: {len(self.history_df)} candles. Last candle epoch: {self.last_candle_epoch}")
+                    return True
+                else:
+                    err = response.get('error', {}).get('message', 'Unknown error')
+                    self.log(f"Attempt {attempt+1}: No candles returned. Reason: {err}")
+            except Exception as e:
+                self.log(f"Attempt {attempt+1}: Error fetching initial history: {e}")
+
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2)
+
+        return False
 
     async def stop(self):
         self.is_running = False
@@ -248,18 +284,27 @@ class TradingBot:
             ohlc = data['ohlc']
             candle_epoch = int(ohlc['open_time'])
 
-            # Real-time update of history_df
+            # Real-time update of history_df - Optimized to avoid full reconstruction
             new_candle = {
-                'epoch': int(ohlc['open_time']),
+                'epoch': candle_epoch,
                 'open': float(ohlc['open']),
                 'high': float(ohlc['high']),
                 'low': float(ohlc['low']),
                 'close': float(ohlc['close'])
             }
-            new_row = pd.DataFrame([new_candle])
-            self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch')
-            if len(self.history_df) > 500:
-                self.history_df = self.history_df.iloc[-500:]
+
+            # Efficiently update or append to history_df
+            if not self.history_df.empty and self.history_df.iloc[-1]['epoch'] == candle_epoch:
+                # Update current building candle
+                idx = self.history_df.index[-1]
+                for col, val in new_candle.items():
+                    self.history_df.at[idx, col] = val
+            else:
+                # Append new candle
+                new_row = pd.DataFrame([new_candle])
+                self.history_df = pd.concat([self.history_df, new_row], ignore_index=True)
+                if len(self.history_df) > 500:
+                    self.history_df = self.history_df.iloc[-500:]
 
             # Detect new candle (candle closed)
             if candle_epoch > self.last_candle_epoch:

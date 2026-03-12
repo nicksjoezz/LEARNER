@@ -131,8 +131,14 @@ class ModelManager:
 
         training_tasks = []
 
+        # Prioritize the current symbol from config to speed up bot start
+        from config_utils import load_config
+        config = load_config()
+        preferred_symbol = config.get('symbol', 'R_100')
+        sorted_symbols = sorted(self.symbols, key=lambda s: s != preferred_symbol)
+
         # Process symbols one by one for fetching to respect rate limits
-        for symbol in self.symbols:
+        for symbol in sorted_symbols:
             # Check if we REALLY need to sync this symbol right now
             needs_sync = should_retrain
             if not needs_sync:

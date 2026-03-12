@@ -199,18 +199,23 @@ class TradingBot:
         max_retries = 3
         for attempt in range(max_retries):
             try:
+                # Increased timeout to 60s for better resilience in cloud environments
                 response = await asyncio.wait_for(self.api.ticks_history({
                     'ticks_history': symbol,
                     'end': 'latest',
                     'count': 500,
                     'granularity': 300,
                     'style': 'candles'
-                }), timeout=30)
+                }), timeout=60)
 
                 if 'candles' in response:
-                    self.history_df = pd.DataFrame(response['candles'])
-                    # Ensure sorting and unique epochs
-                    self.history_df = self.history_df.drop_duplicates(subset=['epoch']).sort_values('epoch')
+                    # Move dataframe creation to a thread to keep event loop responsive
+                    new_df = await asyncio.to_thread(pd.DataFrame, response['candles'])
+                    self.history_df = await asyncio.to_thread(
+                        lambda df: df.drop_duplicates(subset=['epoch']).sort_values('epoch'),
+                        new_df
+                    )
+
                     # Last candle is usually the building one
                     self.last_candle_epoch = int(self.history_df.iloc[-1]['epoch'])
                     self.log(f"Initial history loaded: {len(self.history_df)} candles. Last candle epoch: {self.last_candle_epoch}")
@@ -218,8 +223,10 @@ class TradingBot:
                 else:
                     err = response.get('error', {}).get('message', 'Unknown error')
                     self.log(f"Attempt {attempt+1}: No candles returned. Reason: {err}")
+            except asyncio.TimeoutError:
+                self.log(f"Attempt {attempt+1}: Timeout fetching initial history.")
             except Exception as e:
-                self.log(f"Attempt {attempt+1}: Error fetching initial history: {e}")
+                self.log(f"Attempt {attempt+1}: Error fetching initial history: {type(e).__name__}: {e}")
 
             if attempt < max_retries - 1:
                 await asyncio.sleep(2)
@@ -277,7 +284,9 @@ class TradingBot:
 
     def handle_ohlc_update(self, data):
         if 'error' in data:
-            self.log(f"Subscription error: {data['error'].get('message')}")
+            # Silence expected errors if we are already stopping
+            if self.is_running:
+                self.log(f"Subscription error: {data['error'].get('message')}")
             return
 
         if 'ohlc' in data:
@@ -302,6 +311,7 @@ class TradingBot:
             else:
                 # Append new candle
                 new_row = pd.DataFrame([new_candle])
+                # We use concat sparingly only when a new candle actually forms
                 self.history_df = pd.concat([self.history_df, new_row], ignore_index=True)
                 if len(self.history_df) > 500:
                     self.history_df = self.history_df.iloc[-500:]

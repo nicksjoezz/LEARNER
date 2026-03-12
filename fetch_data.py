@@ -18,9 +18,10 @@ async def update_symbol_data(symbol, data_dir='data'):
     df = pd.DataFrame()
     if os.path.exists(filepath):
         try:
-            df = pd.read_csv(filepath)
+            # Move heavy I/O to a thread
+            df = await asyncio.to_thread(pd.read_csv, filepath)
             if not df.empty:
-                df = df.drop_duplicates(subset=['epoch']).sort_values('epoch')
+                df = await asyncio.to_thread(lambda d: d.drop_duplicates(subset=['epoch']).sort_values('epoch'), df)
         except Exception as e:
             sys.stderr.write(f"Error reading {filepath}: {e}. Starting fresh.\n")
 
@@ -56,19 +57,22 @@ async def update_symbol_data(symbol, data_dir='data'):
         empty_batches = 0
         retry_count = 0
         MAX_RETRIES = 3
+        BATCH_SIZE = 2500 # Reduced from 5000 for stability
+        save_counter = 0
 
         while current_end > gap_start:
             sys.stderr.write(f"[{symbol}] Syncing gap: {datetime.utcfromtimestamp(gap_start)} to {datetime.utcfromtimestamp(current_end)}\n")
 
             try:
+                # Increased timeout to 60s
                 response = await asyncio.wait_for(api.ticks_history({
                     'ticks_history': symbol,
                     'end': str(current_end),
                     'adjust_start_time': 1,
-                    'count': 5000,
+                    'count': BATCH_SIZE,
                     'granularity': granularity,
                     'style': 'candles'
-                }), timeout=30)
+                }), timeout=60)
 
                 if 'error' in response:
                     err = response['error']
@@ -81,7 +85,7 @@ async def update_symbol_data(symbol, data_dir='data'):
                     retry_count += 1
                     if retry_count >= MAX_RETRIES:
                         sys.stderr.write(f"[{symbol}] Max retries reached for segment. Skipping...\n")
-                        current_end -= granularity * 5000 # Skip a large block
+                        current_end -= granularity * BATCH_SIZE * 2 # Skip a block
                         retry_count = 0
                         continue
 
@@ -94,20 +98,28 @@ async def update_symbol_data(symbol, data_dir='data'):
                     empty_batches += 1
                     if empty_batches >= 3:
                         break
-                    current_end -= granularity * 5000
+                    current_end -= granularity * BATCH_SIZE
                     continue
 
                 df_new = pd.DataFrame(candles)
 
                 # Check for progress
-                overlap = df_new['epoch'].isin(df['epoch']).sum() if not df.empty else 0
+                overlap = await asyncio.to_thread(lambda: df_new['epoch'].isin(df['epoch']).sum() if not df.empty else 0)
                 num_new = len(df_new) - overlap
 
                 if num_new > 0:
-                    df = pd.concat([df, df_new]).drop_duplicates(subset=['epoch']).sort_values('epoch')
-                    # Keep within target window
-                    df = df[df['epoch'] >= start_ts]
-                    df.to_csv(filepath, index=False)
+                    def update_df(old_df, new_df, ts):
+                        d = pd.concat([old_df, new_df]).drop_duplicates(subset=['epoch']).sort_values('epoch')
+                        return d[d['epoch'] >= ts]
+
+                    df = await asyncio.to_thread(update_df, df, df_new, start_ts)
+
+                    # Buffered writing to disk
+                    save_counter += 1
+                    if save_counter >= 4:
+                        await asyncio.to_thread(df.to_csv, filepath, index=False)
+                        save_counter = 0
+
                     sys.stderr.write(f"[{symbol}] Added {num_new} new candles.\n")
                     empty_batches = 0
                     retry_count = 0
@@ -122,17 +134,31 @@ async def update_symbol_data(symbol, data_dir='data'):
                     break
                 current_end = batch_earliest - 1
 
+                # Slight delay to respect rate limits
                 await asyncio.sleep(0.5)
 
-            except Exception as e:
-                sys.stderr.write(f"Fetch error: {e}. Retrying in 5s...\n")
+            except asyncio.TimeoutError:
+                sys.stderr.write(f"[{symbol}] Timeout during fetch. Retrying...\n")
                 retry_count += 1
                 if retry_count >= MAX_RETRIES:
-                    sys.stderr.write(f"[{symbol}] Exception retry limit reached. Skipping range.\n")
-                    current_end -= granularity * 5000
+                    sys.stderr.write(f"[{symbol}] Timeout retry limit reached. Skipping range.\n")
+                    current_end -= granularity * BATCH_SIZE * 2
                     retry_count = 0
                 else:
                     await asyncio.sleep(5)
+            except Exception as e:
+                sys.stderr.write(f"[{symbol}] Fetch error: {type(e).__name__}: {e}. Retrying in 5s...\n")
+                retry_count += 1
+                if retry_count >= MAX_RETRIES:
+                    sys.stderr.write(f"[{symbol}] Exception retry limit reached. Skipping range.\n")
+                    current_end -= granularity * BATCH_SIZE * 2
+                    retry_count = 0
+                else:
+                    await asyncio.sleep(5)
+
+        # Final save after gap is filled
+        if not df.empty:
+            await asyncio.to_thread(df.to_csv, filepath, index=False)
 
     # Calculate gaps based on target window
     epochs_list = df['epoch'].tolist() if not df.empty else []

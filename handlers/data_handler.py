@@ -79,7 +79,7 @@ class DataHandler:
         empty_batches = 0
         retry_count = 0
         MAX_RETRIES = 3
-        BATCH_SIZE = 5000
+        BATCH_SIZE = 2500 # Reduced batch size for stability
         save_counter = 0
 
         while current_end > gap_start:
@@ -91,7 +91,7 @@ class DataHandler:
                     'count': BATCH_SIZE,
                     'granularity': granularity,
                     'style': 'candles'
-                }), timeout=60)
+                }), timeout=90)
 
                 if 'error' in response:
                     err = response['error']

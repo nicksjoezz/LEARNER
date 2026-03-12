@@ -183,7 +183,8 @@ class ModelManager:
             await asyncio.gather(*training_tasks)
 
         try:
-            await asyncio.wait_for(api.disconnect(), timeout=10)
+            if api:
+                await asyncio.wait_for(api.disconnect(), timeout=10)
         except: pass
 
         if should_retrain:

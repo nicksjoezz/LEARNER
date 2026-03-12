@@ -51,6 +51,10 @@ class TradingBot:
         }
 
     def save_state(self):
+        # Move state saving to a background task to avoid blocking the loop
+        asyncio.create_task(self._save_state_async())
+
+    async def _save_state_async(self):
         try:
             state = {
                 'wins': self.wins,
@@ -58,8 +62,10 @@ class TradingBot:
                 'total_trades': self.total_trades,
                 'balance': self.balance
             }
-            with open(self.state_file, 'w') as f:
-                json.dump(state, f)
+            def _write():
+                with open(self.state_file, 'w') as f:
+                    json.dump(state, f)
+            await asyncio.to_thread(_write)
         except Exception as e:
             logging.error(f"Error saving state: {e}")
 

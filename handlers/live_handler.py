@@ -55,25 +55,38 @@ class LiveHandler:
         for attempt in range(max_attempts):
             try:
                 self.bot.log(f"Fetch attempt {attempt+1}/{max_attempts}...")
-                response = await asyncio.wait_for(self.api.ticks_history({
-                    'ticks_history': symbol,
-                    'end': 'latest',
-                    'count': 1000,
-                    'granularity': 300,
-                    'style': 'candles'
-                }), timeout=90)
 
-                if 'candles' in response:
-                    df = pd.DataFrame(response['candles'])
+                # Fetch in two chunks to avoid large request timeouts
+                all_candles = []
+                current_end = "latest"
+                for chunk in range(2):
+                    response = await asyncio.wait_for(self.api.ticks_history({
+                        'ticks_history': symbol,
+                        'end': current_end,
+                        'count': 500,
+                        'granularity': 300,
+                        'style': 'candles'
+                    }), timeout=45)
+
+                    if 'candles' in response:
+                        candles = response['candles']
+                        all_candles.extend(candles)
+                        if len(candles) > 0:
+                            current_end = str(candles[0]['epoch'])
+                    else:
+                        break
+
+                if len(all_candles) >= 500:
+                    df = pd.DataFrame(all_candles)
                     df = df.drop_duplicates(subset=['epoch']).sort_values('epoch')
                     self.history_df = df
                     self.last_candle_epoch = int(df.iloc[-1]['epoch'])
                     self.bot.log(f"History loaded: {len(df)} candles.")
                     return True
                 else:
-                    self.bot.log(f"Attempt {attempt+1}: No candles returned. {response.get('error', {}).get('message')}")
+                    self.bot.log(f"Attempt {attempt+1}: Insufficient candles ({len(all_candles)}).")
             except asyncio.TimeoutError:
-                self.bot.log(f"Attempt {attempt+1}: Timeout fetching history.")
+                self.bot.log(f"Attempt {attempt+1}: Timeout during chunk fetch.")
             except Exception as e:
                 self.bot.log(f"Attempt {attempt+1}: Error fetching history: {type(e).__name__}: {e}")
 

@@ -12,6 +12,7 @@ class TradingBot:
     def __init__(self, socketio):
         self.socketio = socketio
         self.is_running = False
+        self.start_lock = asyncio.Lock()
         self.main_task = None
         self.config = {}
         self.balance = 0.0
@@ -50,15 +51,18 @@ class TradingBot:
             'last_trained': model_manager.last_trained
         }
 
+    async def cleanup_connection(self):
+        if self.api:
+            self.log("Closing Deriv API connection...")
+            try:
+                await asyncio.wait_for(self.api.disconnect(), timeout=5)
+            except:
+                pass
+            self.api = None
+
     async def connect(self):
         try:
-            if self.api:
-                self.log("Cleaning up existing API connection...")
-                try:
-                    await asyncio.wait_for(self.api.disconnect(), timeout=5)
-                except:
-                    pass
-                self.api = None
+            await self.cleanup_connection()
 
             app_id = self.config.get('app_id')
             self.log(f"Connecting to Deriv API (App ID: {app_id})...")
@@ -82,11 +86,11 @@ class TradingBot:
     async def subscribe_to_updates(self):
         try:
             # Subscribe to proposal_open_contract to get results
-            poc_sub = await self.api.subscribe({'proposal_open_contract': 1, 'subscribe': 1})
+            poc_sub = await asyncio.wait_for(self.api.subscribe({'proposal_open_contract': 1, 'subscribe': 1}), timeout=20)
             poc_sub.subscribe(self.handle_contract_update)
 
             # Subscribe to balance
-            bal_sub = await self.api.subscribe({'balance': 1, 'subscribe': 1})
+            bal_sub = await asyncio.wait_for(self.api.subscribe({'balance': 1, 'subscribe': 1}), timeout=20)
             bal_sub.subscribe(self.handle_balance_update)
             self.log("Successfully subscribed to account updates.")
         except Exception as e:
@@ -131,10 +135,15 @@ class TradingBot:
         self.history_df = pd.DataFrame()
 
     async def start(self, config):
+        async with self.start_lock:
+            if self.is_running:
+                self.log("Bot is already running. Ignoring start command.")
+                return
+            self.is_running = True
+
         self.log(f"Starting bot for {config['symbol']} Strategy {config['strategy']}...")
         self.reset_metrics()
         self.config = config
-        self.is_running = True
         self.current_symbol = config['symbol']
 
         # Ensure model is initialized or wait briefly if retraining
@@ -145,25 +154,35 @@ class TradingBot:
 
         try:
             if await self.connect():
-                self.log("Connected successfully. Fetching initial history...")
+                self.log("Connected successfully. Initializing data buffer...")
                 # Initial history fetch (500 candles for indicators)
-                await asyncio.wait_for(self.fetch_initial_history(), timeout=60)
+                # Retry once if timeout
+                for attempt in range(2):
+                    try:
+                        # Increased timeout for Railway environment
+                        await asyncio.wait_for(self.fetch_initial_history(), timeout=120)
+                        break
+                    except asyncio.TimeoutError:
+                        if attempt == 0:
+                            self.log("History buffer initialization timed out. Retrying...")
+                            await asyncio.sleep(5)
+                        else:
+                            raise
 
                 if self.history_df.empty:
-                    self.log("Failed to fetch initial history. Stopping bot.")
+                    self.log("Failed to initialize history buffer. Stopping bot.")
                     await self.stop()
                     return
 
                 # Start OHLC subscription
-                self.log("Starting OHLC subscription...")
+                self.log("Starting OHLC subscription loop...")
                 self.main_task = asyncio.create_task(self.ohlc_subscription_loop())
                 self.log("Bot initialization complete and running.")
             else:
                 self.log("Failed to connect to Deriv API.")
-                self.is_running = False
-                self.update_status()
+                await self.stop()
         except asyncio.TimeoutError:
-            self.log("Initialization timed out.")
+            self.log("Initialization timed out after 120s.")
             await self.stop()
         except Exception as e:
             self.log(f"Error during bot start: {e}")
@@ -171,20 +190,19 @@ class TradingBot:
 
     async def fetch_initial_history(self):
         symbol = self.config['symbol']
-        self.log(f"Fetching initial historical data for {symbol} (500 candles)...")
+        self.log(f"Fetching initial historical data for {symbol} from API (500 candles)...")
         try:
-            response = await self.api.ticks_history({
+            response = await asyncio.wait_for(self.api.ticks_history({
                 'ticks_history': symbol,
                 'end': 'latest',
                 'count': 500,
                 'granularity': 300,
                 'style': 'candles'
-            })
+            }), timeout=60)
             if 'candles' in response:
                 self.history_df = pd.DataFrame(response['candles'])
-                # Last candle is usually the building one
-                self.last_candle_epoch = self.history_df.iloc[-1]['epoch']
-                self.log(f"Initial history loaded: {len(self.history_df)} candles. Last candle epoch: {self.last_candle_epoch}")
+                self.last_candle_epoch = int(self.history_df.iloc[-1]['epoch'])
+                self.log(f"Initial history loaded from API: {len(self.history_df)} candles.")
             else:
                 self.log(f"Error: No candles returned for {symbol} initial history.")
         except Exception as e:
@@ -192,17 +210,16 @@ class TradingBot:
 
     async def stop(self):
         self.is_running = False
+
         if self.main_task:
             self.main_task.cancel()
             try:
-                await self.main_task
-            except asyncio.CancelledError:
+                await asyncio.wait_for(self.main_task, timeout=5)
+            except:
                 pass
             self.main_task = None
 
-        if self.api:
-            await self.api.disconnect()
-            self.api = None
+        await self.cleanup_connection()
 
         self.log("Bot stopped.")
         self.update_status()

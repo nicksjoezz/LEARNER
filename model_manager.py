@@ -108,6 +108,7 @@ class ModelManager:
         """Asynchronously triggers training for a single symbol using a separate thread."""
         # Use asyncio.to_thread to run the CPU-intensive training without blocking the event loop
         await asyncio.to_thread(self._train_symbol_sync, symbol, only_pending)
+        gc.collect()
 
     async def startup_sync(self):
         """Startup synchronization: ensures data is current and decides if retraining is needed."""
@@ -131,8 +132,13 @@ class ModelManager:
 
         training_tasks = []
 
+        # Prioritize the currently selected symbol to get the bot running ASAP
+        config = load_config()
+        active_symbol = config.get('symbol', 'R_100')
+        ordered_symbols = [active_symbol] + [s for s in self.symbols if s != active_symbol]
+
         # Process symbols one by one for fetching to respect rate limits
-        for symbol in self.symbols:
+        for symbol in ordered_symbols:
             # Check if we REALLY need to sync this symbol right now
             needs_sync = should_retrain
             if not needs_sync:

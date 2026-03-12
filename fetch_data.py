@@ -18,57 +18,36 @@ async def update_symbol_data(symbol, data_dir='data'):
     df = pd.DataFrame()
     if os.path.exists(filepath):
         try:
-            df = pd.read_csv(filepath)
+            df = await asyncio.to_thread(pd.read_csv, filepath)
             if not df.empty:
-                df = df.drop_duplicates(subset=['epoch']).sort_values('epoch')
+                df = await asyncio.to_thread(lambda: df.drop_duplicates(subset=['epoch']).sort_values('epoch'))
         except Exception as e:
             sys.stderr.write(f"Error reading {filepath}: {e}. Starting fresh.\n")
 
     now_ts = int(datetime.utcnow().timestamp())
     start_ts = int((datetime.utcnow() - timedelta(days=fetch_days)).timestamp())
 
-    # Find Gaps
-    def find_gaps(epochs, start, end, gran):
-        if not epochs:
-            return [(start, end)]
-
-        gaps = []
-        # Gap at the beginning
-        if epochs[0] > start + gran:
-            gaps.append((start, epochs[0] - 1))
-
-        # Gaps between candles
-        for i in range(len(epochs) - 1):
-            if epochs[i+1] - epochs[i] > gran * 1.5: # Allow some jitter
-                gaps.append((epochs[i] + 1, epochs[i+1] - 1))
-
-        # Gap at the end
-        if end - epochs[-1] > gran:
-            gaps.append((epochs[-1] + 1, end))
-
-        return gaps
-
     api = DerivAPI(app_id=app_id)
 
-    async def fill_gap(gap_start, gap_end):
+    async def fetch_range(current_start, current_end):
         nonlocal df
-        current_end = gap_end
-        empty_batches = 0
         retry_count = 0
         MAX_RETRIES = 3
+        batch_count = 0
 
-        while current_end > gap_start:
-            sys.stderr.write(f"[{symbol}] Syncing gap: {datetime.utcfromtimestamp(gap_start)} to {datetime.utcfromtimestamp(current_end)}\n")
+        while current_end > current_start:
+            sys.stderr.write(f"[{symbol}] Syncing gap ending at {datetime.utcfromtimestamp(current_end)}\n")
 
             try:
+                # Reduced batch size to 2500 for better reliability
                 response = await asyncio.wait_for(api.ticks_history({
                     'ticks_history': symbol,
                     'end': str(current_end),
                     'adjust_start_time': 1,
-                    'count': 5000,
+                    'count': 2500,
                     'granularity': granularity,
                     'style': 'candles'
-                }), timeout=30)
+                }), timeout=60)
 
                 if 'error' in response:
                     err = response['error']
@@ -80,8 +59,8 @@ async def update_symbol_data(symbol, data_dir='data'):
 
                     retry_count += 1
                     if retry_count >= MAX_RETRIES:
-                        sys.stderr.write(f"[{symbol}] Max retries reached for segment. Skipping...\n")
-                        current_end -= granularity * 5000 # Skip a large block
+                        sys.stderr.write(f"[{symbol}] Skipping segment due to persistent API error...\n")
+                        current_end -= granularity * 2500
                         retry_count = 0
                         continue
 
@@ -90,67 +69,80 @@ async def update_symbol_data(symbol, data_dir='data'):
 
                 candles = response.get('candles', [])
                 if not candles:
-                    sys.stderr.write(f"[{symbol}] No more data returned in this range.\n")
-                    empty_batches += 1
-                    if empty_batches >= 3:
-                        break
-                    current_end -= granularity * 5000
+                    sys.stderr.write(f"[{symbol}] Empty response. Skipping Segment.\n")
+                    current_end -= granularity * 2500
                     continue
 
                 df_new = pd.DataFrame(candles)
 
-                # Check for progress
-                overlap = df_new['epoch'].isin(df['epoch']).sum() if not df.empty else 0
-                num_new = len(df_new) - overlap
+                # Progress check
+                overlap_mask = await asyncio.to_thread(lambda: df_new['epoch'].isin(df['epoch'])) if not df.empty else [False]*len(df_new)
+                num_new = len(df_new) - sum(overlap_mask)
 
                 if num_new > 0:
-                    df = pd.concat([df, df_new]).drop_duplicates(subset=['epoch']).sort_values('epoch')
-                    # Keep within target window
-                    df = df[df['epoch'] >= start_ts]
-                    df.to_csv(filepath, index=False)
+                    def merge_and_filter(old_df, new_df_raw):
+                        merged = pd.concat([old_df, new_df_raw]).drop_duplicates(subset=['epoch']).sort_values('epoch')
+                        return merged[merged['epoch'] >= start_ts]
+
+                    df = await asyncio.to_thread(merge_and_filter, df, df_new)
                     sys.stderr.write(f"[{symbol}] Added {num_new} new candles.\n")
-                    empty_batches = 0
+
+                    # Periodic save to disk
+                    batch_count += 1
+                    if batch_count >= 4: # Every ~10,000 candles
+                        await asyncio.to_thread(df.to_csv, filepath, index=False)
+                        batch_count = 0
+
                     retry_count = 0
                 else:
-                    empty_batches += 1
-                    sys.stderr.write(f"[{symbol}] Batch contained no new data ({empty_batches}/3).\n")
-                    if empty_batches >= 3:
-                        break
+                    sys.stderr.write(f"[{symbol}] No new data in batch. Skipping Segment.\n")
+                    current_end -= granularity * 2500
 
                 batch_earliest = int(df_new.iloc[0]['epoch'])
-                if batch_earliest <= gap_start:
-                    break
-                current_end = batch_earliest - 1
+                # Force strictly decreasing current_end
+                if batch_earliest < current_end:
+                    current_end = batch_earliest - 1
+                else:
+                    current_end -= granularity * 2500
 
-                await asyncio.sleep(0.5)
+                if current_end <= current_start:
+                    break
+
+                await asyncio.sleep(0.2)
 
             except Exception as e:
-                sys.stderr.write(f"Fetch error: {e}. Retrying in 5s...\n")
+                sys.stderr.write(f"Fetch error for {symbol}: {e}. Retrying...\n")
                 retry_count += 1
                 if retry_count >= MAX_RETRIES:
-                    sys.stderr.write(f"[{symbol}] Exception retry limit reached. Skipping range.\n")
-                    current_end -= granularity * 5000
+                    current_end -= granularity * 2500
                     retry_count = 0
                 else:
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(10)
 
-    # Calculate gaps based on target window
-    epochs_list = df['epoch'].tolist() if not df.empty else []
-    all_gaps = find_gaps(epochs_list, start_ts, now_ts, granularity)
+    # Save initial/existing data once
+    if not df.empty:
+        await asyncio.to_thread(df.to_csv, filepath, index=False)
 
-    if not all_gaps:
-        sys.stderr.write(f"[{symbol}] Data is up to date.\n")
-    else:
-        sys.stderr.write(f"[{symbol}] Found {len(all_gaps)} gaps to fill.\n")
-        for g_start, g_end in all_gaps:
-            await fill_gap(g_start, g_end)
+    # Simple two-pass sync
+    # 1. Forward (up to now)
+    last_recorded = int(df['epoch'].max()) if not df.empty else start_ts
+    if now_ts - last_recorded > granularity:
+        await fetch_range(last_recorded, now_ts)
+
+    # 2. Backward (historical)
+    earliest_recorded = int(df['epoch'].min()) if not df.empty else now_ts
+    if earliest_recorded > start_ts:
+        await fetch_range(start_ts, earliest_recorded)
+
+    # Final save
+    await asyncio.to_thread(df.to_csv, filepath, index=False)
 
     try:
-        await asyncio.wait_for(api.disconnect(), timeout=5)
+        await asyncio.wait_for(api.disconnect(), timeout=10)
     except:
         pass
 
-    sys.stderr.write(f"Completed incremental update for {symbol}. Total: {len(df)} candles.\n")
+    sys.stderr.write(f"Completed sync for {symbol}. Total: {len(df)} candles.\n")
     return df
 
 async def main():

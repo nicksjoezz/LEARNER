@@ -1,5 +1,6 @@
 import asyncio, pandas as pd, os, time, logging, gc, sys, json
 from datetime import datetime, timedelta
+from deriv_api import DerivAPI
 from ml_filter import MLFilter
 from strategy_utils import ut_bot, Backtester
 from indicators import add_indicators

@@ -59,8 +59,12 @@ class DataHandler:
         try:
             for g_start, g_end in all_gaps:
                 df = await self._fill_gap(api, symbol, df, g_start, g_end, granularity, start_ts, filepath, tracker)
+        except Exception as e:
+            sys.stderr.write(f"[{symbol}] Critical error during sync: {e}\n")
         finally:
-            await api.disconnect()
+            try:
+                await asyncio.wait_for(api.disconnect(), timeout=10)
+            except: pass
 
         sys.stderr.write(f"Completed incremental update for {symbol}. Total: {len(df)} candles.\n")
         return df
@@ -86,11 +90,13 @@ class DataHandler:
 
                 if 'error' in response:
                     err = response['error']
+                    sys.stderr.write(f"[{symbol}] API Error: {err.get('message')}\n")
                     if err.get('code') == 'RateLimit':
                         await asyncio.sleep(60)
                         continue
                     retry_count += 1
                     if retry_count >= MAX_RETRIES:
+                        sys.stderr.write(f"[{symbol}] Max retries reached for segment. Skipping...\n")
                         current_end -= granularity * BATCH_SIZE
                         retry_count = 0
                         continue
@@ -100,6 +106,7 @@ class DataHandler:
                 candles = response.get('candles', [])
                 if not candles:
                     empty_batches += 1
+                    sys.stderr.write(f"[{symbol}] No data returned ({empty_batches}/3).\n")
                     if empty_batches >= 3: break
                     current_end -= granularity * BATCH_SIZE
                     continue
@@ -120,29 +127,35 @@ class DataHandler:
                         await asyncio.to_thread(df.to_csv, filepath, index=False)
                         save_counter = 0
 
-                    tracker['total'] -= len(df_new)
+                    num_downloaded = len(df_new)
+                    tracker['total'] -= num_downloaded
                     if tracker['total'] < 0: tracker['total'] = 0
-                    sys.stderr.write(f"{len(df_new)} fetched remaining {tracker['total']}\n")
+                    sys.stderr.write(f"{num_downloaded} fetched remaining {tracker['total']}\n")
 
                     empty_batches = 0
                     retry_count = 0
+
+                    batch_earliest = int(df_new.iloc[0]['epoch'])
+                    if batch_earliest <= gap_start: break
+                    current_end = batch_earliest - 1
                 else:
                     empty_batches += 1
+                    sys.stderr.write(f"[{symbol}] Batch contained no new data ({empty_batches}/3).\n")
                     if empty_batches >= 3: break
+                    current_end -= granularity * BATCH_SIZE
 
-                batch_earliest = int(df_new.iloc[0]['epoch'])
-                if batch_earliest <= gap_start: break
-                current_end = batch_earliest - 1
                 await asyncio.sleep(0.5)
 
             except asyncio.TimeoutError:
+                sys.stderr.write(f"[{symbol}] Timeout during fetch. Retrying...\n")
                 retry_count += 1
                 if retry_count >= MAX_RETRIES:
                     current_end -= granularity * BATCH_SIZE
                     retry_count = 0
                 else:
                     await asyncio.sleep(5)
-            except Exception:
+            except Exception as e:
+                sys.stderr.write(f"[{symbol}] Fetch error: {e}. Retrying...\n")
                 retry_count += 1
                 if retry_count >= MAX_RETRIES:
                     current_end -= granularity * BATCH_SIZE

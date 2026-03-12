@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import logging
+import time
 
 class TradeHandler:
     def __init__(self, bot):
@@ -82,4 +83,3 @@ class TradeHandler:
                 self.save_trade_history()
                 self.bot.save_state()
                 self.bot.update_status()
-import time

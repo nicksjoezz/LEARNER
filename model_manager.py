@@ -97,8 +97,11 @@ class ModelManager:
                         self.models[symbol][strat_idx] = {'model': ml, 'status': 'ready'}
                 else:
                     self.log(f"Insufficient trades ({len(raw_trades)}) for {symbol} Strat {strat_idx}")
+
                 del raw_trades
                 gc.collect()
+                time.sleep(0.5) # Yield time to OS
+
             del df
             gc.collect()
             self.log(f"Finished training all strategies for {symbol}.")

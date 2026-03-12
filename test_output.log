@@ -1,0 +1,48 @@
+Testing bot with symbol: R_100
+Starting bot...
+[Emit] log: Starting bot for R_100...
+[Emit] log: Connected to Deriv. Balance: $332.75
+[Emit] log: Fetching fresh history for R_100 (1000 candles)...
+[Emit] log: Fetch attempt 1/5...
+[Emit] status_update: {'active': True, 'balance': '332.75', 'wins': 0, 'losses': 0, 'total_trades': 0, 'config': {'api_token': '381klIwm4Mr8BTT', 'app_id': '62845', 'symbol': 'R_100', 'strategy': '1', 'trade_pc': 1, 'fetch_days': 365}, 'last_trained': None}
+[0s] Active: True | Balance: 332.75 | Trades: 0
+[5s] Active: True | Balance: 332.75 | Trades: 0
+[10s] Active: True | Balance: 332.75 | Trades: 0
+[15s] Active: True | Balance: 332.75 | Trades: 0
+[20s] Active: True | Balance: 332.75 | Trades: 0
+[25s] Active: True | Balance: 332.75 | Trades: 0
+[30s] Active: True | Balance: 332.75 | Trades: 0
+[35s] Active: True | Balance: 332.75 | Trades: 0
+[40s] Active: True | Balance: 332.75 | Trades: 0
+[45s] Active: True | Balance: 332.75 | Trades: 0
+[50s] Active: True | Balance: 332.75 | Trades: 0
+[55s] Active: True | Balance: 332.75 | Trades: 0
+[60s] Active: True | Balance: 332.75 | Trades: 0
+[65s] Active: True | Balance: 332.75 | Trades: 0
+[70s] Active: True | Balance: 332.75 | Trades: 0
+[75s] Active: True | Balance: 332.75 | Trades: 0
+[80s] Active: True | Balance: 332.75 | Trades: 0
+[85s] Active: True | Balance: 332.75 | Trades: 0
+[Emit] log: Attempt 1: Timeout fetching history.
+[Emit] log: Fetch attempt 2/5...
+[90s] Active: True | Balance: 332.75 | Trades: 0
+[95s] Active: True | Balance: 332.75 | Trades: 0
+[100s] Active: True | Balance: 332.75 | Trades: 0
+[105s] Active: True | Balance: 332.75 | Trades: 0
+[110s] Active: True | Balance: 332.75 | Trades: 0
+[115s] Active: True | Balance: 332.75 | Trades: 0
+Test running for another 30 seconds to catch ticks...
+Stopping bot...
+[Emit] log: Attempt 2: Timeout fetching history.
+[Emit] log: Fetch attempt 3/5...
+[Emit] log: Attempt 3: Timeout fetching history.
+[Emit] log: Fetch attempt 4/5...
+[Emit] log: Attempt 4: Timeout fetching history.
+[Emit] log: Fetch attempt 5/5...
+[Emit] log: Attempt 5: Timeout fetching history.
+[Emit] log: Failed to initialize LiveHandler.
+[Emit] log: Bot stopped.
+[Emit] status_update: {'active': False, 'balance': '332.75', 'wins': 0, 'losses': 0, 'total_trades': 0, 'config': {'api_token': '381klIwm4Mr8BTT', 'app_id': '62845', 'symbol': 'R_100', 'strategy': '1', 'trade_pc': 1, 'fetch_days': 365}, 'last_trained': None}
+[Emit] log: Bot stopped.
+[Emit] status_update: {'active': False, 'balance': '332.75', 'wins': 0, 'losses': 0, 'total_trades': 0, 'config': {'api_token': '381klIwm4Mr8BTT', 'app_id': '62845', 'symbol': 'R_100', 'strategy': '1', 'trade_pc': 1, 'fetch_days': 365}, 'last_trained': None}
+Bot stopped.

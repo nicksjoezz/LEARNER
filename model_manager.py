@@ -160,9 +160,10 @@ class ModelManager:
             try:
                 # Sequential fetching
                 await update_symbol_data(symbol, data_dir=self.data_dir)
-                self.log(f"Data sync complete for {symbol}. Triggering background training...")
+                self.log(f"Data sync complete for {symbol}. Triggering background training while proceeding to next symbol...")
 
                 # Start training in background immediately after fetch finishes for this symbol
+                # This allows fetching for the next symbol to start concurrently with training for the current one
                 task = asyncio.create_task(self.train_symbol(symbol, only_pending=not should_retrain))
                 training_tasks.append(task)
             except Exception as e:

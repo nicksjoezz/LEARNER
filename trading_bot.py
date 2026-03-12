@@ -27,6 +27,8 @@ class TradingBot:
         self.current_symbol = ""
         self.ohlc_subscription = None
         self.start_lock = asyncio.Lock()
+        self.state_file = 'bot_state.json'
+        self.load_state()
 
     def log(self, message):
         timestamp = time.strftime('%H:%M:%S', time.gmtime())
@@ -50,6 +52,31 @@ class TradingBot:
             'config': self.config,
             'last_trained': model_manager.last_trained
         }
+
+    def save_state(self):
+        try:
+            state = {
+                'wins': self.wins,
+                'losses': self.losses,
+                'total_trades': self.total_trades,
+                'balance': self.balance
+            }
+            with open(self.state_file, 'w') as f:
+                json.dump(state, f)
+        except Exception as e:
+            logging.error(f"Error saving state: {e}")
+
+    def load_state(self):
+        if os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, 'r') as f:
+                    state = json.load(f)
+                    self.wins = state.get('wins', 0)
+                    self.losses = state.get('losses', 0)
+                    self.total_trades = state.get('total_trades', 0)
+                    self.balance = state.get('balance', 0.0)
+            except Exception as e:
+                logging.error(f"Error loading state: {e}")
 
     async def connect(self):
         try:
@@ -116,6 +143,7 @@ class TradingBot:
                         self.log(f"LOSS: {side} trade lost. -${abs(profit):.2f}")
 
                     del self.active_contracts[contract_id]
+                    self.save_state()
                     self.update_status()
 
     async def get_ml_filter(self, symbol, strategy_idx):
@@ -194,7 +222,7 @@ class TradingBot:
     async def fetch_initial_history(self):
         symbol = self.config['symbol']
         # Explicitly fetching fresh data from API as per requirement (No local cache for live trading)
-        self.log(f"Fetching fresh historical data for {symbol} (500 candles) from API...")
+        self.log(f"Fetching fresh historical data for {symbol} (1000 candles) from API...")
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -203,7 +231,7 @@ class TradingBot:
                 response = await asyncio.wait_for(self.api.ticks_history({
                     'ticks_history': symbol,
                     'end': 'latest',
-                    'count': 500,
+                    'count': 1000,
                     'granularity': 300,
                     'style': 'candles'
                 }), timeout=60)
@@ -313,8 +341,8 @@ class TradingBot:
                 new_row = pd.DataFrame([new_candle])
                 # We use concat sparingly only when a new candle actually forms
                 self.history_df = pd.concat([self.history_df, new_row], ignore_index=True)
-                if len(self.history_df) > 500:
-                    self.history_df = self.history_df.iloc[-500:]
+                if len(self.history_df) > 1000:
+                    self.history_df = self.history_df.iloc[-1000:]
 
             # Detect new candle (candle closed)
             if candle_epoch > self.last_candle_epoch:
@@ -406,6 +434,7 @@ class TradingBot:
                 contract_id = proposal['buy']['contract_id']
                 self.total_trades += 1
                 self.active_contracts[contract_id] = {'side': side, 'stake': amount}
+                self.save_state()
                 self.log(f"SUCCESS: {side} trade placed! ID: {contract_id} | Stake: ${amount:.2f}")
             else:
                 err = proposal.get('error', {}).get('message', 'Unknown error')

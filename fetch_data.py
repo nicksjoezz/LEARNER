@@ -51,20 +51,19 @@ async def update_symbol_data(symbol, data_dir='data'):
 
     api = DerivAPI(app_id=app_id)
 
-    async def fill_gap(gap_start, gap_end):
+    async def fill_gap(gap_start, gap_end, total_remaining_tracker):
         nonlocal df
         current_end = gap_end
         empty_batches = 0
         retry_count = 0
         MAX_RETRIES = 3
-        BATCH_SIZE = 2500 # Reduced from 5000 for stability
+        BATCH_SIZE = 5000 # Back to 5000 as requested
         save_counter = 0
 
         while current_end > gap_start:
-            sys.stderr.write(f"[{symbol}] Syncing gap: {datetime.utcfromtimestamp(gap_start)} to {datetime.utcfromtimestamp(current_end)}\n")
+            # sys.stderr.write(f"[{symbol}] Syncing gap: {datetime.utcfromtimestamp(gap_start)} to {datetime.utcfromtimestamp(current_end)}\n")
 
             try:
-                # Increased timeout to 60s
                 response = await asyncio.wait_for(api.ticks_history({
                     'ticks_history': symbol,
                     'end': str(current_end),
@@ -114,13 +113,16 @@ async def update_symbol_data(symbol, data_dir='data'):
 
                     df = await asyncio.to_thread(update_df, df, df_new, start_ts)
 
-                    # Buffered writing to disk
+                    # Buffered writing to disk (every 4 batches)
                     save_counter += 1
                     if save_counter >= 4:
                         await asyncio.to_thread(df.to_csv, filepath, index=False)
                         save_counter = 0
 
-                    sys.stderr.write(f"[{symbol}] Added {num_new} new candles.\n")
+                    total_remaining_tracker['total'] -= len(df_new)
+                    if total_remaining_tracker['total'] < 0: total_remaining_tracker['total'] = 0
+                    sys.stderr.write(f"[{symbol}] {len(df_new)} fetched. Remaining: {total_remaining_tracker['total']}\n")
+
                     empty_batches = 0
                     retry_count = 0
                 else:
@@ -167,9 +169,12 @@ async def update_symbol_data(symbol, data_dir='data'):
     if not all_gaps:
         sys.stderr.write(f"[{symbol}] Data is up to date.\n")
     else:
-        sys.stderr.write(f"[{symbol}] Found {len(all_gaps)} gaps to fill.\n")
+        total_missing = sum((g_end - g_start) // granularity for g_start, g_end in all_gaps)
+        sys.stderr.write(f"[{symbol}] Found {len(all_gaps)} gaps. Total missing: approx {total_missing} candles.\n")
+
+        tracker = {'total': total_missing}
         for g_start, g_end in all_gaps:
-            await fill_gap(g_start, g_end)
+            await fill_gap(g_start, g_end, tracker)
 
     try:
         await asyncio.wait_for(api.disconnect(), timeout=5)

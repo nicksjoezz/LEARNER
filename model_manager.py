@@ -11,6 +11,7 @@ class ModelManager:
         self.last_trained = None
         self.is_initial_training = False
         self.training_lock = asyncio.Lock()
+        self.symbol_training_lock = asyncio.Lock() # Lock for per-symbol training to save memory
         self.symbols = ['R_100', 'R_75', 'R_50', 'R_25', 'R_10']
         self.strat_params = [(1, 10), (2, 20), (3, 30), (1, 20), (2, 10), (3, 20), (1, 30), (2, 30), (3, 10), (1.5, 15)]
         self.data_dir, self.model_dir = 'data', 'models'
@@ -106,8 +107,10 @@ class ModelManager:
 
     async def train_symbol(self, symbol, only_pending=False):
         """Asynchronously triggers training for a single symbol using a separate thread."""
-        # Use asyncio.to_thread to run the CPU-intensive training without blocking the event loop
-        await asyncio.to_thread(self._train_symbol_sync, symbol, only_pending)
+        # Ensure only one symbol is training at a time to minimize memory usage
+        async with self.symbol_training_lock:
+            # Use asyncio.to_thread to run the CPU-intensive training without blocking the event loop
+            await asyncio.to_thread(self._train_symbol_sync, symbol, only_pending)
 
     async def startup_sync(self):
         """Startup synchronization: ensures data is current and decides if retraining is needed."""

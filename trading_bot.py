@@ -240,9 +240,19 @@ class TradingBot:
                 self.log(f"OHLC Subscription active for {symbol}.")
                 self.ohlc_subscription.subscribe(self.handle_ohlc_update)
 
-                # Keep the task alive and monitor connection
+                # Keep the task alive and monitor connection with a heartbeat ping
+                # Deriv requires a ping every 30-60 seconds to keep WebSocket alive
+                last_ping = time.time()
                 while self.is_running:
                     await asyncio.sleep(5)
+                    if time.time() - last_ping > 30:
+                        try:
+                            # Use ping as both a heartbeat and a health check
+                            await asyncio.wait_for(self.api.ping({'ping': 1}), timeout=10)
+                            last_ping = time.time()
+                        except Exception as e:
+                            self.log(f"Heartbeat failed: {e}. Reconnecting...")
+                            break # Break inner loop to trigger reconnection
 
             except asyncio.CancelledError:
                 self.log("OHLC subscription cancelled.")
@@ -257,26 +267,48 @@ class TradingBot:
                 except: pass
 
     def handle_ohlc_update(self, data):
+        """
+        Optimized OHLC update handler.
+        Updates the building candle in-place to avoid expensive DataFrame operations on every tick.
+        """
         if 'error' in data:
             self.log(f"Subscription error: {data['error'].get('message')}")
             return
 
-        if 'ohlc' in data:
-            ohlc = data['ohlc']
-            candle_epoch = int(ohlc['open_time'])
+        if 'ohlc' not in data:
+            return
 
-            # Real-time update of history_df
-            new_candle = {
-                'epoch': int(ohlc['open_time']),
-                'open': float(ohlc['open']),
-                'high': float(ohlc['high']),
-                'low': float(ohlc['low']),
-                'close': float(ohlc['close'])
-            }
-            new_row = pd.DataFrame([new_candle])
-            self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch')
-            if len(self.history_df) > 500:
-                self.history_df = self.history_df.iloc[-500:]
+        ohlc = data['ohlc']
+        candle_epoch = int(ohlc['open_time'])
+
+        # Real-time update of history_df
+        new_candle_data = {
+            'epoch': candle_epoch,
+            'open': float(ohlc['open']),
+            'high': float(ohlc['high']),
+            'low': float(ohlc['low']),
+            'close': float(ohlc['close'])
+        }
+
+        try:
+            # Performance Optimization: Update in-place if it's the same candle (most ticks)
+            if not self.history_df.empty and int(self.history_df.iloc[-1]['epoch']) == candle_epoch:
+                last_idx = self.history_df.index[-1]
+                for col, val in new_candle_data.items():
+                    self.history_df.at[last_idx, col] = val
+            else:
+                # Append new candle (only once per candle period)
+                new_row = pd.DataFrame([new_candle_data])
+                self.history_df = pd.concat([self.history_df, new_row], ignore_index=True)
+
+                # Maintain data integrity: ensure strictly increasing epochs
+                # If data is out-of-order, restore chronological order
+                if len(self.history_df) > 1 and self.history_df.iloc[-2]['epoch'] >= candle_epoch:
+                    self.history_df = self.history_df.drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch').reset_index(drop=True)
+
+                # Keep buffer size fixed to 500 candles
+                if len(self.history_df) > 500:
+                    self.history_df = self.history_df.iloc[-500:].reset_index(drop=True)
 
             # Detect new candle (candle closed)
             if candle_epoch > self.last_candle_epoch:
@@ -287,6 +319,8 @@ class TradingBot:
                 else:
                     self.log(f"Bot session active. Current candle open time: {time.ctime(candle_epoch)}")
                 self.last_candle_epoch = candle_epoch
+        except Exception as e:
+            self.log(f"Error in OHLC update: {e}")
 
 
     async def check_signals(self):

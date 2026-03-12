@@ -123,7 +123,11 @@ class ModelManager:
             self.is_initial_training = True
 
         self.log("Starting startup data synchronization... Please wait.")
-        from fetch_data import update_symbol_data
+        from handlers.data_handler import DataHandler
+        data_handler = DataHandler(data_dir=self.data_dir)
+        from config_utils import load_config
+        config = load_config()
+        api = DerivAPI(app_id=config.get('app_id', '62845'))
 
         # Check if a full retrain is needed (missing or > 24hrs)
         should_retrain = True
@@ -161,8 +165,8 @@ class ModelManager:
 
             self.log(f"Processing {symbol}: Syncing market data...")
             try:
-                # Sequential fetching
-                await update_symbol_data(symbol, data_dir=self.data_dir)
+                # Sequential fetching using a single persistent connection
+                await data_handler.update_symbol_data(symbol, api=api)
                 self.log(f"Data sync complete for {symbol}. Triggering background training while proceeding to next symbol...")
 
                 # Start training in background immediately after fetch finishes for this symbol
@@ -177,6 +181,10 @@ class ModelManager:
             self.log(f"Waiting for {len(training_tasks)} symbols to finish training...")
             await asyncio.gather(*training_tasks)
 
+        try:
+            await asyncio.wait_for(api.disconnect(), timeout=10)
+        except: pass
+
         if should_retrain:
             self.last_trained = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
             self.save_metadata()
@@ -189,13 +197,17 @@ class ModelManager:
     async def train_all_models(self):
         """Full retraining cycle."""
         self.log(f"Commencing full retraining cycle...")
-        from fetch_data import update_symbol_data
+        from handlers.data_handler import DataHandler
+        data_handler = DataHandler(data_dir=self.data_dir)
+        from config_utils import load_config
+        config = load_config()
+        api = DerivAPI(app_id=config.get('app_id', '62845'))
 
         training_tasks = []
         for symbol in self.symbols:
             self.log(f"Updating historical data for {symbol}...")
             try:
-                await update_symbol_data(symbol, data_dir=self.data_dir)
+                await data_handler.update_symbol_data(symbol, api=api)
                 task = asyncio.create_task(self.train_symbol(symbol, only_pending=False))
                 training_tasks.append(task)
             except Exception as e:
@@ -203,6 +215,10 @@ class ModelManager:
 
         if training_tasks:
             await asyncio.gather(*training_tasks)
+
+        try:
+            await asyncio.wait_for(api.disconnect(), timeout=10)
+        except: pass
 
         self.last_trained = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
         self.save_metadata()

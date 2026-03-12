@@ -11,10 +11,10 @@ class DataHandler:
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
 
-    async def update_symbol_data(self, symbol):
+    async def update_symbol_data(self, symbol, api=None):
         config = load_config()
         fetch_days = int(config.get('fetch_days', 365))
-        app_id = config.get('app_id')
+        app_id = config.get('app_id', '62845')
         filepath = os.path.join(self.data_dir, f"{symbol}_5m_2y.csv")
         granularity = 300
 
@@ -54,7 +54,11 @@ class DataHandler:
         sys.stderr.write(f"[{symbol}] Total missing: approx {total_missing} candles.\n")
 
         tracker = {'total': total_missing}
-        api = DerivAPI(app_id=app_id)
+
+        close_api = False
+        if api is None:
+            api = DerivAPI(app_id=app_id)
+            close_api = True
 
         try:
             for g_start, g_end in all_gaps:
@@ -62,9 +66,10 @@ class DataHandler:
         except Exception as e:
             sys.stderr.write(f"[{symbol}] Critical error during sync: {e}\n")
         finally:
-            try:
-                await asyncio.wait_for(api.disconnect(), timeout=10)
-            except: pass
+            if close_api:
+                try:
+                    await asyncio.wait_for(api.disconnect(), timeout=10)
+                except: pass
 
         sys.stderr.write(f"Completed incremental update for {symbol}. Total: {len(df)} candles.\n")
         return df
@@ -92,12 +97,13 @@ class DataHandler:
                     err = response['error']
                     sys.stderr.write(f"[{symbol}] API Error: {err.get('message')}\n")
                     if err.get('code') == 'RateLimit':
+                        sys.stderr.write(f"[{symbol}] Rate limit hit. Sleeping 60s...\n")
                         await asyncio.sleep(60)
                         continue
                     retry_count += 1
                     if retry_count >= MAX_RETRIES:
-                        sys.stderr.write(f"[{symbol}] Max retries reached for segment. Skipping...\n")
-                        current_end -= granularity * BATCH_SIZE
+                        sys.stderr.write(f"[{symbol}] Max retries reached. Skipping large range.\n")
+                        current_end -= granularity * BATCH_SIZE * 5 # Skip more to avoid getting stuck
                         retry_count = 0
                         continue
                     await asyncio.sleep(5)
@@ -150,7 +156,8 @@ class DataHandler:
                 sys.stderr.write(f"[{symbol}] Timeout during fetch. Retrying...\n")
                 retry_count += 1
                 if retry_count >= MAX_RETRIES:
-                    current_end -= granularity * BATCH_SIZE
+                    sys.stderr.write(f"[{symbol}] Max timeout retries reached. Skipping large range.\n")
+                    current_end -= granularity * BATCH_SIZE * 5
                     retry_count = 0
                 else:
                     await asyncio.sleep(5)
@@ -158,7 +165,8 @@ class DataHandler:
                 sys.stderr.write(f"[{symbol}] Fetch error: {e}. Retrying...\n")
                 retry_count += 1
                 if retry_count >= MAX_RETRIES:
-                    current_end -= granularity * BATCH_SIZE
+                    sys.stderr.write(f"[{symbol}] Max exception retries reached. Skipping large range.\n")
+                    current_end -= granularity * BATCH_SIZE * 5
                     retry_count = 0
                 else:
                     await asyncio.sleep(5)

@@ -30,7 +30,10 @@ class TradeHandler:
 
     async def place_trade(self, api, side, symbol, strategy_idx):
         try:
+            # For testing, ensure stake isn't too high if balance is high
             amount = round(max(self.bot.balance * (float(self.bot.config.get('trade_pc', 1)) / 100.0), 0.35), 2)
+            if amount > 10: amount = 0.35 # Failsafe for demo accounts with high balance
+
             self.bot.log(f"PLACING {side} - Stake: ${amount} (Strat {strategy_idx})")
 
             r = await api.buy({

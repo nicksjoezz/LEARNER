@@ -5,7 +5,7 @@ CONFIG_FILE = 'config.json'
 DEFAULT_CONFIG = {
     "api_token": "",
     "app_id": "62845",
-    "symbol": "R_100",
+    "symbol": "R_50",
     "strategy": "1",
     "trade_pc": 1.0,
     "fetch_days": 365

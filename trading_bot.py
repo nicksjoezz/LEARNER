@@ -95,6 +95,9 @@ class TradingBot:
 
             try:
                 if await self.live_handler.connect(config):
+                    # Subscribe account updates first to ensure we don't miss balance/contract info
+                    await self.live_handler.subscribe_account()
+
                     if await self.live_handler.fetch_history(config['symbol']):
                         if await self.live_handler.start_ohlc_subscription(config['symbol']):
                             self.log("Bot initialization complete and running LIVE.")

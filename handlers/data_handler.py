@@ -65,6 +65,7 @@ class DataHandler:
                 df = await self._fill_gap(api, symbol, df, g_start, g_end, granularity, start_ts, filepath, tracker)
         except Exception as e:
             sys.stderr.write(f"[{symbol}] Critical error during sync: {e}\n")
+            # If we fail, we still return what we have
         finally:
             if close_api:
                 try:
@@ -136,7 +137,7 @@ class DataHandler:
                     num_downloaded = len(df_new)
                     tracker['total'] -= num_downloaded
                     if tracker['total'] < 0: tracker['total'] = 0
-                    sys.stderr.write(f"{num_downloaded} fetched remaining {tracker['total']}\n")
+                    sys.stderr.write(f"{num_downloaded} fetched remaining {int(tracker['total'])}\n")
 
                     empty_batches = 0
                     retry_count = 0

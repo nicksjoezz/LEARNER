@@ -21,21 +21,27 @@ class LiveHandler:
 
     async def connect(self, config):
         try:
-            self.api = DerivAPI(app_id=config['app_id'])
-            auth = await asyncio.wait_for(self.api.authorize(config['api_token']), timeout=20)
+            self.api = DerivAPI(app_id=config.get('app_id', '62845'))
+            auth = await asyncio.wait_for(self.api.authorize(config['api_token']), timeout=30)
             self.bot.balance = float(auth['authorize']['balance'])
             self.bot.log(f"Connected to Deriv. Balance: ${self.bot.balance:.2f}")
+            return True
+        except Exception as e:
+            self.bot.log(f"LiveHandler Connection error: {e}")
+            return False
 
+    async def subscribe_account(self):
+        try:
+            self.bot.log("Subscribing to account updates...")
             # Subscribe to updates
             poc_sub = await self.api.subscribe({'proposal_open_contract': 1, 'subscribe': 1})
             poc_sub.subscribe(self.handle_contract_update)
 
             bal_sub = await self.api.subscribe({'balance': 1, 'subscribe': 1})
             bal_sub.subscribe(self.handle_balance_update)
-
             return True
         except Exception as e:
-            self.bot.log(f"LiveHandler Connection error: {e}")
+            self.bot.log(f"Account subscription error: {e}")
             return False
 
     def handle_balance_update(self, data):
@@ -51,47 +57,59 @@ class LiveHandler:
     async def fetch_history(self, symbol):
         self.bot.log(f"Fetching fresh history for {symbol} (1000 candles)...")
 
-        max_attempts = 5
-        for attempt in range(max_attempts):
+        # Use a fresh connection for fetching if the primary one is busy or stuck
+        # This often resolves "stuck" history requests in python-deriv-api
+        temp_api = DerivAPI(app_id=self.bot.config.get('app_id', '62845'))
+        try:
+            await asyncio.wait_for(temp_api.authorize(self.bot.config['api_token']), timeout=20)
+
+            all_candles = []
+            current_end = "latest"
+
+            for i in range(4): # 4 chunks of 250 = 1000
+                success = False
+                for attempt in range(3):
+                    try:
+                        self.bot.log(f"Fetching history chunk {i+1}/4 (Attempt {attempt+1})...")
+                        response = await asyncio.wait_for(temp_api.ticks_history({
+                            'ticks_history': symbol,
+                            'end': current_end,
+                            'count': 250,
+                            'granularity': 300,
+                            'style': 'candles'
+                        }), timeout=30)
+
+                        if 'candles' in response:
+                            candles = response['candles']
+                            if candles:
+                                all_candles.extend(candles)
+                                current_end = str(candles[0]['epoch'] - 1)
+                                success = True
+                                break
+                            else:
+                                success = True # No more data
+                                break
+                        else:
+                            self.bot.log(f"Chunk failed: {response.get('error', {}).get('message')}")
+                    except Exception as e:
+                        self.bot.log(f"Chunk error: {e}")
+                    await asyncio.sleep(2)
+                if not success: break
+
+            if len(all_candles) >= 200:
+                df = pd.DataFrame(all_candles)
+                df = df.drop_duplicates(subset=['epoch']).sort_values('epoch')
+                self.history_df = df
+                self.last_candle_epoch = int(df.iloc[-1]['epoch'])
+                self.bot.log(f"History loaded: {len(df)} candles.")
+                return True
+
+        except Exception as e:
+            self.bot.log(f"History fetch failed: {e}")
+        finally:
             try:
-                self.bot.log(f"Fetch attempt {attempt+1}/{max_attempts}...")
-
-                # Fetch in two chunks to avoid large request timeouts
-                all_candles = []
-                current_end = "latest"
-                for chunk in range(2):
-                    response = await asyncio.wait_for(self.api.ticks_history({
-                        'ticks_history': symbol,
-                        'end': current_end,
-                        'count': 500,
-                        'granularity': 300,
-                        'style': 'candles'
-                    }), timeout=45)
-
-                    if 'candles' in response:
-                        candles = response['candles']
-                        all_candles.extend(candles)
-                        if len(candles) > 0:
-                            current_end = str(candles[0]['epoch'])
-                    else:
-                        break
-
-                if len(all_candles) >= 500:
-                    df = pd.DataFrame(all_candles)
-                    df = df.drop_duplicates(subset=['epoch']).sort_values('epoch')
-                    self.history_df = df
-                    self.last_candle_epoch = int(df.iloc[-1]['epoch'])
-                    self.bot.log(f"History loaded: {len(df)} candles.")
-                    return True
-                else:
-                    self.bot.log(f"Attempt {attempt+1}: Insufficient candles ({len(all_candles)}).")
-            except asyncio.TimeoutError:
-                self.bot.log(f"Attempt {attempt+1}: Timeout during chunk fetch.")
-            except Exception as e:
-                self.bot.log(f"Attempt {attempt+1}: Error fetching history: {type(e).__name__}: {e}")
-
-            if attempt < max_attempts - 1:
-                await asyncio.sleep(2)
+                await asyncio.wait_for(temp_api.disconnect(), timeout=5)
+            except: pass
 
         return False
 

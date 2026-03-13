@@ -35,7 +35,15 @@ def toggle_bot():
     else:
         c = load_config()
         if not c.get('api_token'): return jsonify({'status': 'error', 'message': 'No API Token'})
-        asyncio.run_coroutine_threadsafe(bot.start(c), bot_loop)
+
+        async def start_sequence():
+            # Ensure symbol is ready before starting live bot
+            if await model_manager.ensure_symbol_ready(c['symbol']):
+                await bot.start(c)
+            else:
+                bot.log(f"Failed to prepare {c['symbol']} for live trading.")
+
+        asyncio.run_coroutine_threadsafe(start_sequence(), bot_loop)
     return jsonify({'status': 'success'})
 
 @app.route('/get_system_status')
@@ -77,9 +85,16 @@ async def get_bt_data(symbol, days):
 @app.route('/run_backtest', methods=['POST'])
 def run_bt():
     d = request.json
+
+    async def bt_sequence():
+        # Ensure symbol is ready before backtesting
+        if await model_manager.ensure_symbol_ready(d['symbol']):
+            return await get_bt_data(d['symbol'], d['days'])
+        return pd.DataFrame()
+
     try:
-        future = asyncio.run_coroutine_threadsafe(get_bt_data(d['symbol'], d['days']), bot_loop)
-        df_raw = future.result(timeout=60)
+        future = asyncio.run_coroutine_threadsafe(bt_sequence(), bot_loop)
+        df_raw = future.result(timeout=180) # Increased timeout for training
     except Exception as e:
         return jsonify({'error': str(e), 'results': []})
 

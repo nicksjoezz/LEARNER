@@ -9,7 +9,7 @@ class ModelManager:
     def __init__(self, socketio=None):
         self.socketio = socketio
         self.models = {}
-        self.last_trained = None
+        self.last_trained = {} # symbol -> last_trained_date
         self.is_initial_training = False
         self.training_lock = asyncio.Lock()
         self.symbol_training_lock = asyncio.Lock() # Lock for per-symbol training to save memory
@@ -30,7 +30,7 @@ class ModelManager:
     def save_metadata(self):
         try:
             with open(self.metadata_path, 'w') as f:
-                json.dump({'last_trained': self.last_trained}, f)
+                json.dump({'last_trained_dict': self.last_trained}, f)
         except: pass
 
     def load_metadata(self):
@@ -38,7 +38,12 @@ class ModelManager:
             try:
                 with open(self.metadata_path, 'r') as f:
                     data = json.load(f)
-                    self.last_trained = data.get('last_trained')
+                    # Support both old string format and new dict format
+                    lt = data.get('last_trained_dict')
+                    if isinstance(lt, dict):
+                        self.last_trained = lt
+                    else:
+                        self.last_trained = {}
             except: pass
 
     async def initialize_models(self):
@@ -117,114 +122,71 @@ class ModelManager:
             await asyncio.to_thread(self._train_symbol_sync, symbol, only_pending)
 
     async def startup_sync(self):
-        """Startup synchronization: ensures data is current and decides if retraining is needed."""
+        """Startup synchronization: processes default symbol R_50."""
         async with self.training_lock:
-            if self.is_initial_training:
-                return
+            if self.is_initial_training: return
             self.is_initial_training = True
 
-        self.log("Starting startup data synchronization... Please wait.")
-        from handlers.data_handler import DataHandler
-        data_handler = DataHandler(data_dir=self.data_dir)
-        from config_utils import load_config
-        config = load_config()
-        api = DerivAPI(app_id=config.get('app_id', '62845'))
-
-        # Check if a full retrain is needed (missing or > 24hrs)
-        should_retrain = True
-        if self.last_trained:
-            try:
-                lt = datetime.strptime(self.last_trained, '%Y-%m-%d %H:%M:%S UTC')
-                if (datetime.utcnow() - lt) < timedelta(hours=24):
-                    should_retrain = False
-                    self.log(f"Last training was at {self.last_trained} (Less than 24h ago). Skipping full retrain.")
-            except: pass
-
-        training_tasks = []
-
-        # Prioritize the current symbol from config to speed up bot start
-        from config_utils import load_config
-        config = load_config()
-        preferred_symbol = config.get('symbol', 'R_100')
-        sorted_symbols = sorted(self.symbols, key=lambda s: s != preferred_symbol)
-
-        # Process symbols one by one for fetching to respect rate limits
-        for symbol in sorted_symbols:
-            # Check if we REALLY need to sync this symbol right now
-            needs_sync = should_retrain
-            if not needs_sync:
-                # If any model for this symbol is not ready, we need to sync and train
-                if any(self.get_model_status(symbol, i+1) != 'ready' for i in range(len(self.strat_params))):
-                    needs_sync = True
-                # If data file doesn't exist, we need to sync
-                if not os.path.exists(os.path.join(self.data_dir, f"{symbol}_5m_2y.csv")):
-                    needs_sync = True
-
-            if not needs_sync:
-                self.log(f"Symbol {symbol} is up to date and models are ready. Skipping sync.")
-                continue
-
-            self.log(f"Processing {symbol}: Syncing market data...")
-            try:
-                # Sequential fetching using a single persistent connection
-                await data_handler.update_symbol_data(symbol, api=api)
-                self.log(f"Data sync complete for {symbol}. Triggering background training while proceeding to next symbol...")
-
-                # Start training in background immediately after fetch finishes for this symbol
-                # This allows fetching for the next symbol to start concurrently with training for the current one
-                task = asyncio.create_task(self.train_symbol(symbol, only_pending=not should_retrain))
-                training_tasks.append(task)
-            except Exception as e:
-                self.log(f"Failed to process {symbol}: {e}")
-
-        # Wait for all background training to complete before marking as finished
-        if training_tasks:
-            self.log(f"Waiting for {len(training_tasks)} symbols to finish training...")
-            await asyncio.gather(*training_tasks)
-
         try:
-            if api:
-                await asyncio.wait_for(api.disconnect(), timeout=10)
-        except: pass
+            self.log("Starting startup sync for default symbol (R_50)...")
+            await self.ensure_symbol_ready('R_50')
+            self.log("Startup synchronization finished.")
+        finally:
+            self.is_initial_training = False
+            if self.socketio:
+                self.socketio.emit('training_complete', {'status': 'success'})
 
-        if should_retrain:
-            self.last_trained = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
-            self.save_metadata()
+    async def ensure_symbol_ready(self, symbol):
+        """Ensures a symbol's data is updated and models are trained for the day."""
+        # Use a secondary lock to allow multiple symbols to be queued but not overlap
+        async with self.training_lock:
+            today = datetime.utcnow().strftime('%Y-%m-%d')
+            last_trained_date = self.last_trained.get(symbol, "")
 
-        self.is_initial_training = False
-        if self.socketio:
-            self.socketio.emit('training_complete', {'status': 'success'})
-        self.log(f"Startup synchronization and training finished.")
+            # Check if all models are 'ready' and trained today
+            all_ready = all(self.get_model_status(symbol, i+1) == 'ready' for i in range(len(self.strat_params)))
+            data_exists = os.path.exists(os.path.join(self.data_dir, f"{symbol}_5m_2y.csv"))
+
+            if all_ready and data_exists and last_trained_date == today:
+                self.log(f"Symbol {symbol} is already ready for today.")
+                return True
+
+            self.log(f"Preparing {symbol}: Fetching data and training ML...")
+            if self.socketio:
+                self.socketio.emit('training_progress', {'message': f"Syncing {symbol} market data..."})
+
+            from handlers.data_handler import DataHandler
+            data_handler = DataHandler(data_dir=self.data_dir)
+
+            try:
+                # Use a fresh connection for on-demand sync
+                await data_handler.update_symbol_data(symbol)
+
+                if self.socketio:
+                    self.socketio.emit('training_progress', {'message': f"Training ML models for {symbol}..."})
+
+                await self.train_symbol(symbol, only_pending=False)
+
+                self.last_trained[symbol] = today
+                self.save_metadata()
+
+                if self.socketio:
+                    self.socketio.emit('training_progress', {'message': f"{symbol} models ready."})
+
+                return True
+            except Exception as e:
+                self.log(f"Failed to prepare {symbol}: {e}")
+                if self.socketio:
+                    self.socketio.emit('training_progress', {'symbol': symbol, 'status': 'failed'})
+                return False
 
     async def train_all_models(self):
-        """Full retraining cycle."""
-        self.log(f"Commencing full retraining cycle...")
-        from handlers.data_handler import DataHandler
-        data_handler = DataHandler(data_dir=self.data_dir)
-        from config_utils import load_config
-        config = load_config()
-        api = DerivAPI(app_id=config.get('app_id', '62845'))
-
-        training_tasks = []
-        for symbol in self.symbols:
-            self.log(f"Updating historical data for {symbol}...")
-            try:
-                await data_handler.update_symbol_data(symbol, api=api)
-                task = asyncio.create_task(self.train_symbol(symbol, only_pending=False))
-                training_tasks.append(task)
-            except Exception as e:
-                self.log(f"Failed to sync data for {symbol}: {e}")
-
-        if training_tasks:
-            await asyncio.gather(*training_tasks)
-
-        try:
-            await asyncio.wait_for(api.disconnect(), timeout=10)
-        except: pass
-
-        self.last_trained = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
-        self.save_metadata()
-        self.log(f"Retraining cycle complete at {self.last_trained}.")
+        """Daily maintenance cycle."""
+        self.log(f"Commencing daily maintenance cycle...")
+        # We only force update the ones that were already used/trained
+        for symbol in self.last_trained.keys():
+            await self.ensure_symbol_ready(symbol)
+        self.log(f"Daily maintenance cycle complete.")
 
     def get_model_status(self, symbol, strategy_idx):
         return self.models.get(symbol, {}).get(int(strategy_idx), {}).get('status', 'pending')

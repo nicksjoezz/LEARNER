@@ -30,34 +30,32 @@ class TradeHandler:
 
     async def place_trade(self, api, side, symbol, strategy_idx):
         try:
-            # For testing, ensure stake isn't too high if balance is high
-            amount = round(max(self.bot.balance * (float(self.bot.config.get('trade_pc', 1)) / 100.0), 0.35), 2)
-            if amount > 10: amount = 0.35 # Failsafe for demo accounts with high balance
+            # Calculate stake based on current balance and config percentage
+            raw_amount = self.bot.balance * (float(self.bot.config.get('trade_pc', 1)) / 100.0)
+            amount = round(max(raw_amount, 0.35), 2)
+
+            # CRITICAL: Cap stake for demo accounts to avoid 'maximum purchase price' errors
+            # if the account has large synthetic balance.
+            if amount > 50: amount = 10.0
 
             self.bot.log(f"PLACING {side} - Stake: ${amount} (Strat {strategy_idx})")
 
-            r = await api.buy({
-                "buy": 1, "price": amount,
+            # Parameters for Rise/Fall (CALL/PUT)
+            trade_params = {
+                "buy": 1,
+                "price": amount,
                 "parameters": {
-                    "amount": amount, "basis": "stake",
-                    "contract_type": side, "currency": "USD",
-                    "duration": 3, "duration_unit": "t", # Use ticks for faster exit in Rise/Fall if needed, or stick to 15m
+                    "amount": amount,
+                    "basis": "stake",
+                    "contract_type": side,
+                    "currency": "USD",
+                    "duration": 15,
+                    "duration_unit": "m",
                     "symbol": symbol
                 }
-            })
+            }
 
-            # Reset duration to 3 candles (15m) as per original logic if requested,
-            # but Rise/Fall usually uses minutes.
-            # Updated to 15m to match original.
-            r = await api.buy({
-                "buy": 1, "price": amount,
-                "parameters": {
-                    "amount": amount, "basis": "stake",
-                    "contract_type": side, "currency": "USD",
-                    "duration": 15, "duration_unit": "m",
-                    "symbol": symbol
-                }
-            })
+            r = await asyncio.wait_for(api.buy(trade_params), timeout=20)
 
             if 'buy' in r:
                 cid = r['buy']['contract_id']

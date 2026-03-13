@@ -41,6 +41,19 @@ class TradeHandler:
                 "parameters": {
                     "amount": amount, "basis": "stake",
                     "contract_type": side, "currency": "USD",
+                    "duration": 3, "duration_unit": "t", # Use ticks for faster exit in Rise/Fall if needed, or stick to 15m
+                    "symbol": symbol
+                }
+            })
+
+            # Reset duration to 3 candles (15m) as per original logic if requested,
+            # but Rise/Fall usually uses minutes.
+            # Updated to 15m to match original.
+            r = await api.buy({
+                "buy": 1, "price": amount,
+                "parameters": {
+                    "amount": amount, "basis": "stake",
+                    "contract_type": side, "currency": "USD",
                     "duration": 15, "duration_unit": "m",
                     "symbol": symbol
                 }
@@ -59,6 +72,18 @@ class TradeHandler:
         except Exception as e:
             self.bot.log(f"Trade placement ERROR: {e}")
         return None
+
+    async def close_trades_by_side(self, side, api=None):
+        """Closes all open trades of a specific type (reversal logic)."""
+        if not api: return
+        for cid, details in list(self.active_contracts.items()):
+            if details['side'] == side:
+                self.bot.log(f"REVERSAL: Closing {side} contract {cid} for opposite signal.")
+                try:
+                    # Deriv sell requires contract_id
+                    await api.sell({"sell": cid, "price": 0})
+                except Exception as e:
+                    self.bot.log(f"Reversal sell error for {cid}: {e}")
 
     def handle_contract_update(self, contract):
         if contract['is_sold']:

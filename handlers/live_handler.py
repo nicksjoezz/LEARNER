@@ -8,6 +8,7 @@ import logging
 from deriv_api import DerivAPI
 from handlers.strategy_handler import StrategyHandler
 from handlers.trade_handler import TradeHandler
+from datetime import datetime, timedelta
 
 class LiveHandler:
     def __init__(self, bot):
@@ -15,26 +16,30 @@ class LiveHandler:
         self.api = None
         self.history_df = pd.DataFrame()
         self.last_candle_epoch = 0
-        self.ohlc_subscription = None
+        self.ohlc_queue = asyncio.Queue()
         self.strategy_handler = StrategyHandler(bot)
         self.trade_handler = TradeHandler(bot)
-        self.ohlc_queue = asyncio.Queue()
+        self.tick_count = 0
 
     async def connect(self, config):
         try:
+            # Clear any old API instance to avoid Bad File Descriptor
+            if self.api:
+                try: await asyncio.wait_for(self.api.disconnect(), timeout=5)
+                except: pass
+
             self.api = DerivAPI(app_id=config.get('app_id', '62845'))
             auth = await asyncio.wait_for(self.api.authorize(config['api_token']), timeout=30)
             self.bot.balance = float(auth['authorize']['balance'])
             self.bot.log(f"Connected to Deriv. Balance: ${self.bot.balance:.2f}")
             return True
         except Exception as e:
-            self.bot.log(f"LiveHandler Connection error: {e}")
+            self.bot.log(f"Connection error: {e}")
             return False
 
     async def subscribe_account(self):
         try:
-            self.bot.log("Subscribing to account updates...")
-            # Subscribe to updates
+            self.bot.log("Subscribing to balance and contract updates...")
             poc_sub = await self.api.subscribe({'proposal_open_contract': 1, 'subscribe': 1})
             poc_sub.subscribe(self.handle_contract_update)
 
@@ -48,7 +53,6 @@ class LiveHandler:
     def handle_balance_update(self, data):
         if 'balance' in data:
             self.bot.balance = float(data['balance']['balance'])
-            self.bot.save_state()
             self.bot.update_status()
 
     def handle_contract_update(self, data):
@@ -56,162 +60,127 @@ class LiveHandler:
             self.trade_handler.handle_contract_update(data['proposal_open_contract'])
 
     async def fetch_history(self, symbol):
-        self.bot.log(f"Fetching fresh history for {symbol} (1000 candles)...")
-
-        # Use a fresh connection for fetching if the primary one is busy or stuck
-        temp_api = DerivAPI(app_id=self.bot.config.get('app_id', '62845'))
+        self.bot.log(f"Fetching initial historical data for {symbol} (500 candles)...")
         try:
-            await asyncio.wait_for(temp_api.authorize(self.bot.config['api_token']), timeout=20)
+            # Using primary API for history fetch
+            response = await asyncio.wait_for(self.api.ticks_history({
+                'ticks_history': symbol,
+                'end': 'latest',
+                'count': 500,
+                'granularity': 300,
+                'style': 'candles'
+            }), timeout=30)
 
-            all_candles = []
-            current_end = "latest"
-
-            for i in range(4): # 4 chunks of 250 = 1000
-                success = False
-                for attempt in range(3):
-                    try:
-                        self.bot.log(f"Fetching history chunk {i+1}/4 (Attempt {attempt+1})...")
-                        response = await asyncio.wait_for(temp_api.ticks_history({
-                            'ticks_history': symbol,
-                            'end': current_end,
-                            'count': 250,
-                            'granularity': 300,
-                            'style': 'candles'
-                        }), timeout=30)
-
-                        if 'candles' in response:
-                            candles = response['candles']
-                            if candles:
-                                all_candles.extend(candles)
-                                current_end = str(candles[0]['epoch'] - 1)
-                                success = True
-                                break
-                            else:
-                                success = True # No more data
-                                break
-                        else:
-                            self.bot.log(f"Chunk failed: {response.get('error', {}).get('message')}")
-                    except Exception as e:
-                        self.bot.log(f"Chunk error: {e}")
-                    await asyncio.sleep(2)
-                if not success: break
-
-            if len(all_candles) >= 200:
-                df = pd.DataFrame(all_candles)
-                df = df.drop_duplicates(subset=['epoch']).sort_values('epoch')
+            if 'candles' in response:
+                df = pd.DataFrame(response['candles'])
+                df = df.sort_values('epoch')
+                # Ensure float types to avoid TypeError during tick updates
+                for col in ['open', 'high', 'low', 'close']:
+                    df[col] = df[col].astype(float)
                 self.history_df = df
                 self.last_candle_epoch = int(df.iloc[-1]['epoch'])
-                self.bot.log(f"History loaded: {len(df)} candles.")
+                self.bot.log(f"Initial history loaded: {len(df)} candles.")
                 return True
-
         except Exception as e:
-            self.bot.log(f"History fetch failed: {e}")
-        finally:
-            try:
-                await asyncio.wait_for(temp_api.disconnect(), timeout=5)
-            except: pass
-
+            self.bot.log(f"History fetch error: {e}")
         return False
 
     async def ohlc_subscription_loop(self, symbol):
-        """Dedicated loop for handling OHLC updates with reconnection logic."""
-        last_heartbeat = time.time()
-
+        """
+        Resilient loop using 'ticks' subscription to build OHLC candles manually.
+        This avoids common hangs in the 'ohlc' subscription type.
+        """
         while self.bot.is_running:
             try:
-                self.bot.log(f"Initializing OHLC stream for {symbol}...")
+                self.bot.log(f"Starting tick stream for {symbol}...")
 
-                # Clear queue
-                while not self.ohlc_queue.empty():
-                    self.ohlc_queue.get_nowait()
-
-                # Setup subscription
-                sub = await self.api.subscribe({
-                    'ticks_history': symbol,
-                    'subscribe': 1,
-                    'end': 'latest',
-                    'granularity': 300,
-                    'style': 'candles'
-                })
-
-                # Proxy updates to queue
+                # Subscribe to ticks for higher reliability
+                sub = await self.api.subscribe({'ticks': symbol, 'subscribe': 1})
                 sub.subscribe(lambda data: self.ohlc_queue.put_nowait(data))
 
-                self.bot.log("OHLC stream active.")
+                self.bot.log(f"Tick stream active. Monitoring for signal conditions...")
 
                 while self.bot.is_running:
                     try:
-                        # Wait for data with 90s timeout (watchdog)
-                        data = await asyncio.wait_for(self.ohlc_queue.get(), timeout=90)
-                        self.handle_ohlc_update(data)
+                        # 60s timeout for individual ticks - very aggressive reconnection
+                        data = await asyncio.wait_for(self.ohlc_queue.get(), timeout=60)
 
-                        # Bot Heartbeat every 2 minutes
-                        if time.time() - last_heartbeat > 120:
-                            self.bot.log(f"Bot Heartbeat: Monitoring {symbol}...")
-                            # Proactive ping to keep connection alive
+                        if 'tick' in data:
+                            self.handle_tick(data['tick'])
+
+                        # Periodic heartbeat/ping
+                        self.tick_count += 1
+                        if self.tick_count % 100 == 0:
                             await self.api.ping({'ping': 1})
-                            last_heartbeat = time.time()
+                            self.bot.update_status()
 
                     except asyncio.TimeoutError:
-                        self.bot.log("OHLC stream timeout (90s). Attempting reconnection...")
-                        break # Reconnect
-                    except Exception as e:
-                        if self.bot.is_running:
-                            self.bot.log(f"OHLC Loop processing error: {e}")
+                        self.bot.log("Tick stream timeout. Reconnecting...")
                         break
-
+                    except Exception as e:
+                        self.bot.log(f"Stream processing error: {e}")
+                        break
             except Exception as e:
                 if self.bot.is_running:
-                    self.bot.log(f"OHLC Subscription failed: {e}. Retrying in 5s...")
+                    self.bot.log(f"Subscription failed: {e}. Retrying in 5s...")
                     await asyncio.sleep(5)
-                else:
-                    break
+                else: break
 
-    def handle_ohlc_update(self, data):
-        if 'ohlc' in data:
-            ohlc = data['ohlc']
-            epoch = int(ohlc['open_time'])
+    def handle_tick(self, tick):
+        price = float(tick['quote'])
+        epoch = int(tick['epoch'])
+        # Current 5-minute candle start time
+        candle_start = (epoch // 300) * 300
 
-            new_candle = {
-                'epoch': epoch,
-                'open': float(ohlc['open']),
-                'high': float(ohlc['high']),
-                'low': float(ohlc['low']),
-                'close': float(ohlc['close'])
+        if self.history_df.empty:
+            # Should not happen as we fetch history first
+            return
+
+        last_idx = self.history_df.index[-1]
+        last_candle = self.history_df.iloc[-1]
+
+        if candle_start == last_candle['epoch']:
+            # Update current candle
+            self.history_df.at[last_idx, 'close'] = price
+            if price > last_candle['high']: self.history_df.at[last_idx, 'high'] = price
+            if price < last_candle['low']: self.history_df.at[last_idx, 'low'] = price
+        elif candle_start > last_candle['epoch']:
+            # NEW CANDLE STARTED
+            self.bot.log(f"CANDLE CLOSED: {time.strftime('%H:%M:%S', time.gmtime(last_candle['epoch']))}")
+
+            # 1. Add new candle starting with this tick (previous candle is now at index -2)
+            new_row = {
+                'epoch': candle_start,
+                'open': price,
+                'high': price,
+                'low': price,
+                'close': price
             }
+            # Ensure float types for the new row
+            new_df = pd.DataFrame([new_row])
+            for col in ['open', 'high', 'low', 'close']:
+                new_df[col] = new_df[col].astype(float)
 
-            if not self.history_df.empty and self.history_df.iloc[-1]['epoch'] == epoch:
-                # Optimized update of current candle
-                self.history_df.loc[self.history_df.index[-1], ['open', 'high', 'low', 'close']] = \
-                    [new_candle['open'], new_candle['high'], new_candle['low'], new_candle['close']]
-            elif not self.history_df.empty and epoch < self.history_df.iloc[-1]['epoch']:
-                # Out of order tick, ignore or re-sort? Let's ignore old ticks for stability
-                return
-            else:
-                # New candle started
-                self.history_df = pd.concat([self.history_df, pd.DataFrame([new_candle])], ignore_index=True)
-                # Ensure no duplicates and sorted (fallback safety)
-                if len(self.history_df) > 1 and self.history_df.iloc[-1]['epoch'] <= self.history_df.iloc[-2]['epoch']:
-                    self.history_df = self.history_df.drop_duplicates(subset=['epoch']).sort_values('epoch')
+            self.history_df = pd.concat([self.history_df, new_df], ignore_index=True)
+            if len(self.history_df) > 1000:
+                self.history_df = self.history_df.iloc[-1000:]
 
-                if len(self.history_df) > 1000:
-                    self.history_df = self.history_df.iloc[-1000:]
+            self.last_candle_epoch = candle_start
 
-            if epoch > self.last_candle_epoch:
-                if self.last_candle_epoch != 0:
-                    self.bot.log(f"CANDLE CLOSED: {time.ctime(self.last_candle_epoch)}")
-                    # Trigger signal check immediately
-                    asyncio.create_task(self.check_signals())
-                else:
-                    self.bot.log(f"Bot session active. Current candle open time: {time.ctime(epoch)}")
-                self.last_candle_epoch = epoch
+            # 2. Trigger signal check on the JUST CLOSED candle (index -2)
+            asyncio.create_task(self.check_signals())
 
     async def check_signals(self):
+        # Always print signal status to logs as requested
         side = await self.strategy_handler.check_signals(self.history_df)
         if side:
             await self.place_trade(side)
 
     async def place_trade(self, side):
+        # Close opposite trades first (Reversal logic)
+        opposite = 'PUT' if side == 'CALL' else 'CALL'
+        await self.trade_handler.close_trades_by_side(opposite, self.api)
+
         await self.trade_handler.place_trade(
             self.api, side, self.bot.config['symbol'], self.bot.config['strategy']
         )
@@ -220,6 +189,5 @@ class LiveHandler:
         if self.api:
             try:
                 await asyncio.wait_for(self.api.disconnect(), timeout=5)
-            except:
-                pass
+            except: pass
             self.api = None

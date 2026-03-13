@@ -24,6 +24,7 @@ class TradingBot:
         self.state_file = 'bot_state.json'
         self.load_state()
         self.live_handler = None
+        self.ohlc_task = None
         self.data_handler = DataHandler()
 
     def log(self, message):
@@ -98,10 +99,13 @@ class TradingBot:
                     await self.live_handler.subscribe_account()
 
                     if await self.live_handler.fetch_history(config['symbol']):
-                        if await self.live_handler.start_ohlc_subscription(config['symbol']):
-                            self.log("Bot initialization complete and running LIVE.")
-                            self.update_status()
-                            return
+                        # Start OHLC subscription as a background task managed by the bot
+                        self.ohlc_task = asyncio.create_task(
+                            self.live_handler.ohlc_subscription_loop(config['symbol'])
+                        )
+                        self.log("Bot initialization complete and running LIVE.")
+                        self.update_status()
+                        return
 
                 self.log("Failed to initialize LiveHandler.")
                 await self.stop_internal()
@@ -115,6 +119,14 @@ class TradingBot:
 
     async def stop_internal(self):
         self.is_running = False
+        if self.ohlc_task:
+            self.ohlc_task.cancel()
+            try:
+                await self.ohlc_task
+            except asyncio.CancelledError:
+                pass
+            self.ohlc_task = None
+
         if self.live_handler:
             await self.live_handler.disconnect()
             self.live_handler = None

@@ -18,6 +18,7 @@ class LiveHandler:
         self.ohlc_subscription = None
         self.strategy_handler = StrategyHandler(bot)
         self.trade_handler = TradeHandler(bot)
+        self.ohlc_queue = asyncio.Queue()
 
     async def connect(self, config):
         try:
@@ -58,7 +59,6 @@ class LiveHandler:
         self.bot.log(f"Fetching fresh history for {symbol} (1000 candles)...")
 
         # Use a fresh connection for fetching if the primary one is busy or stuck
-        # This often resolves "stuck" history requests in python-deriv-api
         temp_api = DerivAPI(app_id=self.bot.config.get('app_id', '62845'))
         try:
             await asyncio.wait_for(temp_api.authorize(self.bot.config['api_token']), timeout=20)
@@ -113,20 +113,59 @@ class LiveHandler:
 
         return False
 
-    async def start_ohlc_subscription(self, symbol):
-        try:
-            self.ohlc_subscription = await self.api.subscribe({
-                'ticks_history': symbol,
-                'subscribe': 1,
-                'end': 'latest',
-                'granularity': 300,
-                'style': 'candles'
-            })
-            self.ohlc_subscription.subscribe(self.handle_ohlc_update)
-            return True
-        except Exception as e:
-            self.bot.log(f"Subscription error: {e}")
-            return False
+    async def ohlc_subscription_loop(self, symbol):
+        """Dedicated loop for handling OHLC updates with reconnection logic."""
+        last_heartbeat = time.time()
+
+        while self.bot.is_running:
+            try:
+                self.bot.log(f"Initializing OHLC stream for {symbol}...")
+
+                # Clear queue
+                while not self.ohlc_queue.empty():
+                    self.ohlc_queue.get_nowait()
+
+                # Setup subscription
+                sub = await self.api.subscribe({
+                    'ticks_history': symbol,
+                    'subscribe': 1,
+                    'end': 'latest',
+                    'granularity': 300,
+                    'style': 'candles'
+                })
+
+                # Proxy updates to queue
+                sub.subscribe(lambda data: self.ohlc_queue.put_nowait(data))
+
+                self.bot.log("OHLC stream active.")
+
+                while self.bot.is_running:
+                    try:
+                        # Wait for data with 90s timeout (watchdog)
+                        data = await asyncio.wait_for(self.ohlc_queue.get(), timeout=90)
+                        self.handle_ohlc_update(data)
+
+                        # Bot Heartbeat every 2 minutes
+                        if time.time() - last_heartbeat > 120:
+                            self.bot.log(f"Bot Heartbeat: Monitoring {symbol}...")
+                            # Proactive ping to keep connection alive
+                            await self.api.ping({'ping': 1})
+                            last_heartbeat = time.time()
+
+                    except asyncio.TimeoutError:
+                        self.bot.log("OHLC stream timeout (90s). Attempting reconnection...")
+                        break # Reconnect
+                    except Exception as e:
+                        if self.bot.is_running:
+                            self.bot.log(f"OHLC Loop processing error: {e}")
+                        break
+
+            except Exception as e:
+                if self.bot.is_running:
+                    self.bot.log(f"OHLC Subscription failed: {e}. Retrying in 5s...")
+                    await asyncio.sleep(5)
+                else:
+                    break
 
     def handle_ohlc_update(self, data):
         if 'ohlc' in data:
@@ -145,8 +184,16 @@ class LiveHandler:
                 # Optimized update of current candle
                 self.history_df.loc[self.history_df.index[-1], ['open', 'high', 'low', 'close']] = \
                     [new_candle['open'], new_candle['high'], new_candle['low'], new_candle['close']]
+            elif not self.history_df.empty and epoch < self.history_df.iloc[-1]['epoch']:
+                # Out of order tick, ignore or re-sort? Let's ignore old ticks for stability
+                return
             else:
+                # New candle started
                 self.history_df = pd.concat([self.history_df, pd.DataFrame([new_candle])], ignore_index=True)
+                # Ensure no duplicates and sorted (fallback safety)
+                if len(self.history_df) > 1 and self.history_df.iloc[-1]['epoch'] <= self.history_df.iloc[-2]['epoch']:
+                    self.history_df = self.history_df.drop_duplicates(subset=['epoch']).sort_values('epoch')
+
                 if len(self.history_df) > 1000:
                     self.history_df = self.history_df.iloc[-1000:]
 

@@ -29,14 +29,15 @@ class TradingBot:
     def log(self, message):
         timestamp = time.strftime('%H:%M:%S', time.gmtime())
         full_log = f"{timestamp} | {message}"
-        # print(full_log) # Force print for tests
         logging.info(full_log)
         self.log_history.append(full_log)
         if len(self.log_history) > self.max_logs:
             self.log_history.pop(0)
+        # Safely emit using SocketIO across threads
         self.socketio.emit('log', message)
 
     def update_status(self):
+        # Safely emit using SocketIO across threads
         self.socketio.emit('status_update', self.get_state())
 
     def get_state(self):

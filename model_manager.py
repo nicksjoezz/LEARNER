@@ -138,30 +138,31 @@ class ModelManager:
 
     async def ensure_symbol_ready(self, symbol):
         """Ensures a symbol's data is updated and models are trained for the day."""
-        # Use a secondary lock to allow multiple symbols to be queued but not overlap
-        async with self.training_lock:
-            today = datetime.utcnow().strftime('%Y-%m-%d')
-            last_trained_date = self.last_trained.get(symbol, "")
+        today = datetime.utcnow().strftime('%Y-%m-%d')
+        last_trained_date = self.last_trained.get(symbol, "")
 
-            # Check if all models are 'ready' and trained today
-            all_ready = all(self.get_model_status(symbol, i+1) == 'ready' for i in range(len(self.strat_params)))
-            data_exists = os.path.exists(os.path.join(self.data_dir, f"{symbol}_5m_2y.csv"))
+        # Check if all models are 'ready' and trained today
+        all_ready = all(self.get_model_status(symbol, i+1) == 'ready' for i in range(len(self.strat_params)))
+        data_exists = os.path.exists(os.path.join(self.data_dir, f"{symbol}_5m_2y.csv"))
 
-            if all_ready and data_exists and last_trained_date == today:
-                self.log(f"Symbol {symbol} is already ready for today.")
-                return True
+        if all_ready and data_exists and last_trained_date == today:
+            self.log(f"Symbol {symbol} is already ready for today.")
+            return True
 
-            self.log(f"Preparing {symbol}: Fetching data and training ML...")
-            if self.socketio:
-                self.socketio.emit('training_progress', {'message': f"Syncing {symbol} market data..."})
+        # Data sync is non-blocking to other symbols
+        self.log(f"Preparing {symbol}: Syncing market data...")
+        if self.socketio:
+            self.socketio.emit('training_progress', {'message': f"Syncing {symbol} market data..."})
 
-            from handlers.data_handler import DataHandler
-            data_handler = DataHandler(data_dir=self.data_dir)
+        from handlers.data_handler import DataHandler
+        data_handler = DataHandler(data_dir=self.data_dir)
 
-            try:
-                # Use a fresh connection for on-demand sync
-                await data_handler.update_symbol_data(symbol)
+        try:
+            # Sync data without holding the global training lock
+            await data_handler.update_symbol_data(symbol)
 
+            # Only the actual ML training phase is locked globally
+            async with self.training_lock:
                 if self.socketio:
                     self.socketio.emit('training_progress', {'message': f"Training ML models for {symbol}..."})
 
@@ -174,11 +175,11 @@ class ModelManager:
                     self.socketio.emit('training_progress', {'message': f"{symbol} models ready."})
 
                 return True
-            except Exception as e:
-                self.log(f"Failed to prepare {symbol}: {e}")
-                if self.socketio:
-                    self.socketio.emit('training_progress', {'symbol': symbol, 'status': 'failed'})
-                return False
+        except Exception as e:
+            self.log(f"Failed to prepare {symbol}: {e}")
+            if self.socketio:
+                self.socketio.emit('training_progress', {'symbol': symbol, 'status': 'failed'})
+            return False
 
     async def train_all_models(self):
         """Daily maintenance cycle."""

@@ -8,55 +8,69 @@ def ut_bot(df, a=1, c=10):
     UT Bot Alerts implementation in Python
     a: Key Value (Sensitivity)
     c: ATR Period
+    Optimized for performance with large datasets.
     """
     df = df.copy()
 
-    # ATR
+    # ATR calculation is already somewhat efficient in 'ta'
     df['atr'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=c)
     df['nLoss'] = a * df['atr']
 
-    # src = close
-    src = df['close']
-
-    # ATR Trailing Stop calculation using numpy for safety and speed
     close_vals = df['close'].values
     nloss_vals = df['nLoss'].values
-    xATRTrailingStop = np.zeros(len(df))
+    size = len(df)
+    xATRTrailingStop = np.zeros(size)
 
-    for i in range(1, len(df)):
-        if i == 0: continue
-        if close_vals[i] > xATRTrailingStop[i-1] and close_vals[i-1] > xATRTrailingStop[i-1]:
-            xATRTrailingStop[i] = max(xATRTrailingStop[i-1], close_vals[i] - nloss_vals[i])
-        elif close_vals[i] < xATRTrailingStop[i-1] and close_vals[i-1] < xATRTrailingStop[i-1]:
-            xATRTrailingStop[i] = min(xATRTrailingStop[i-1], close_vals[i] + nloss_vals[i])
-        elif close_vals[i] > xATRTrailingStop[i-1]:
-            xATRTrailingStop[i] = close_vals[i] - nloss_vals[i]
+    # Optimized trailing stop loop
+    prev_stop = 0.0
+    for i in range(1, size):
+        curr_close = close_vals[i]
+        prev_close = close_vals[i-1]
+        nloss = nloss_vals[i]
+
+        if curr_close > prev_stop and prev_close > prev_stop:
+            val = curr_close - nloss
+            if prev_stop < val: prev_stop = val
+        elif curr_close < prev_stop and prev_close < prev_stop:
+            val = curr_close + nloss
+            if prev_stop > val: prev_stop = val
+        elif curr_close > prev_stop:
+            prev_stop = curr_close - nloss
         else:
-            xATRTrailingStop[i] = close_vals[i] + nloss_vals[i]
+            prev_stop = curr_close + nloss
+        xATRTrailingStop[i] = prev_stop
 
     df['xATRTrailingStop'] = xATRTrailingStop
 
-    # Position tracking
-    pos = np.zeros(len(df))
-    for i in range(1, len(df)):
+    # Vectorized position tracking
+    # We can't easily vectorize the whole thing because of dependencies,
+    # but we can improve the loop.
+    pos = np.zeros(size)
+    curr_pos = 0.0
+    for i in range(1, size):
         if close_vals[i-1] < xATRTrailingStop[i-1] and close_vals[i] > xATRTrailingStop[i-1]:
-            pos[i] = 1
+            curr_pos = 1.0
         elif close_vals[i-1] > xATRTrailingStop[i-1] and close_vals[i] < xATRTrailingStop[i-1]:
-            pos[i] = -1
-        else:
-            pos[i] = pos[i-1]
+            curr_pos = -1.0
+        pos[i] = curr_pos
 
     df['pos'] = pos
 
-    # ema 1 of src
-    df['ema1'] = ta.trend.ema_indicator(df['close'], window=1)
+    # ema 1 of src (simply the close price for ema window 1)
+    df['ema1'] = close_vals
 
-    # crossover
-    df['above'] = (df['ema1'] > df['xATRTrailingStop']) & (df['ema1'].shift(1) <= df['xATRTrailingStop'].shift(1))
-    df['below'] = (df['ema1'] < df['xATRTrailingStop']) & (df['ema1'].shift(1) >= df['xATRTrailingStop'].shift(1))
+    # Vectorized signals
+    df['prev_xATR'] = df['xATRTrailingStop'].shift(1)
+    df['prev_ema1'] = df['ema1'].shift(1)
+
+    df['above'] = (df['ema1'] > df['xATRTrailingStop']) & (df['prev_ema1'] <= df['prev_xATR'])
+    df['below'] = (df['ema1'] < df['xATRTrailingStop']) & (df['prev_ema1'] >= df['prev_xATR'])
 
     df['buy'] = (df['close'] > df['xATRTrailingStop']) & df['above']
     df['sell'] = (df['close'] < df['xATRTrailingStop']) & df['below']
+
+    # Cleanup temporary columns
+    df.drop(columns=['prev_xATR', 'prev_ema1'], inplace=True)
 
     return df
 
@@ -66,51 +80,56 @@ class Backtester:
         self.exit_candles = exit_candles
 
     def run(self):
-        trades = []
+        """Vectorized trade execution simulation for performance."""
         df = self.df.reset_index(drop=True)
+        limit = len(df) - self.exit_candles - 1
 
-        for i in range(len(df) - self.exit_candles - 1):
-            if df['buy'].iloc[i]:
-                # Entry at next candle open
-                entry_idx = i + 1
-                exit_idx = i + self.exit_candles
+        # Identify signal indices
+        buy_indices = df.index[df['buy']].values
+        buy_indices = buy_indices[buy_indices < limit]
 
-                entry_price = df['open'].iloc[entry_idx]
-                exit_price = df['close'].iloc[exit_idx]
+        sell_indices = df.index[df['sell']].values
+        sell_indices = sell_indices[sell_indices < limit]
 
-                profit = exit_price - entry_price
-                win = profit > 0
+        # Pre-extract arrays for faster access
+        epochs = df['epoch'].values
+        opens = df['open'].values
+        closes = df['close'].values
 
-                trades.append({
-                    'type': 'buy',
-                    'entry_time': df['epoch'].iloc[entry_idx],
-                    'entry_price': entry_price,
-                    'exit_time': df['epoch'].iloc[exit_idx],
-                    'exit_price': exit_price,
-                    'profit': profit,
-                    'win': win
-                })
+        trades = []
+        # Process BUYS
+        for i in buy_indices:
+            entry_idx = i + 1
+            exit_idx = i + self.exit_candles
+            entry_price = opens[entry_idx]
+            exit_price = closes[exit_idx]
+            profit = exit_price - entry_price
+            trades.append({
+                'type': 'buy',
+                'entry_time': epochs[entry_idx],
+                'entry_price': entry_price,
+                'exit_time': epochs[exit_idx],
+                'exit_price': exit_price,
+                'profit': profit,
+                'win': profit > 0
+            })
 
-            elif df['sell'].iloc[i]:
-                # Entry at next candle open
-                entry_idx = i + 1
-                exit_idx = i + self.exit_candles
-
-                entry_price = df['open'].iloc[entry_idx]
-                exit_price = df['close'].iloc[exit_idx]
-
-                profit = entry_price - exit_price
-                win = profit > 0
-
-                trades.append({
-                    'type': 'sell',
-                    'entry_time': df['epoch'].iloc[entry_idx],
-                    'entry_price': entry_price,
-                    'exit_time': df['epoch'].iloc[exit_idx],
-                    'exit_price': exit_price,
-                    'profit': profit,
-                    'win': win
-                })
+        # Process SELLS
+        for i in sell_indices:
+            entry_idx = i + 1
+            exit_idx = i + self.exit_candles
+            entry_price = opens[entry_idx]
+            exit_price = closes[exit_idx]
+            profit = entry_price - exit_price
+            trades.append({
+                'type': 'sell',
+                'entry_time': epochs[entry_idx],
+                'entry_price': entry_price,
+                'exit_time': epochs[exit_idx],
+                'exit_price': exit_price,
+                'profit': profit,
+                'win': profit > 0
+            })
 
         return pd.DataFrame(trades)
 
@@ -174,7 +193,7 @@ def simulate_financials(trades_df, initial_balance=1000, risk_pc=1, win_payout=0
         # Dynamic stake based on current balance
         stake = balance * (float(risk_pc) / 100.0)
         # Minimum stake check (Deriv min is 0.35)
-        stake = max(stake, 0.35)
+        if stake < 0.35: stake = 0.35
 
         if win:
             balance += stake * win_payout

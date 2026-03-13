@@ -84,8 +84,8 @@ class TradeHandler:
                     self.bot.log(f"Reversal sell error for {cid}: {e}")
 
     def handle_contract_update(self, contract):
-        if contract['is_sold']:
-            status = contract['status'] # won, lost
+        if contract.get('is_sold'):
+            status = contract.get('status') # won, lost
             profit = float(contract['profit'])
             cid = contract['contract_id']
 

@@ -142,9 +142,9 @@ class LiveHandler:
             }
 
             if not self.history_df.empty and self.history_df.iloc[-1]['epoch'] == epoch:
-                idx = self.history_df.index[-1]
-                for col, val in new_candle.items():
-                    self.history_df.at[idx, col] = val
+                # Optimized update of current candle
+                self.history_df.loc[self.history_df.index[-1], ['open', 'high', 'low', 'close']] = \
+                    [new_candle['open'], new_candle['high'], new_candle['low'], new_candle['close']]
             else:
                 self.history_df = pd.concat([self.history_df, pd.DataFrame([new_candle])], ignore_index=True)
                 if len(self.history_df) > 1000:
@@ -153,7 +153,10 @@ class LiveHandler:
             if epoch > self.last_candle_epoch:
                 if self.last_candle_epoch != 0:
                     self.bot.log(f"CANDLE CLOSED: {time.ctime(self.last_candle_epoch)}")
+                    # Trigger signal check immediately
                     asyncio.create_task(self.check_signals())
+                else:
+                    self.bot.log(f"Bot session active. Current candle open time: {time.ctime(epoch)}")
                 self.last_candle_epoch = epoch
 
     async def check_signals(self):

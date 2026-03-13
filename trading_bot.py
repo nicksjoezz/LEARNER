@@ -59,8 +59,7 @@ class TradingBot:
             state = {
                 'wins': self.wins,
                 'losses': self.losses,
-                'total_trades': self.total_trades,
-                'balance': self.balance
+                'total_trades': self.total_trades
             }
             def _write():
                 with open(self.state_file, 'w') as f:
@@ -77,7 +76,6 @@ class TradingBot:
                     self.wins = state.get('wins', 0)
                     self.losses = state.get('losses', 0)
                     self.total_trades = state.get('total_trades', 0)
-                    self.balance = state.get('balance', 0.0)
             except Exception as e:
                 logging.error(f"Error loading state: {e}")
 

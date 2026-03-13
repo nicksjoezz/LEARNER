@@ -421,7 +421,20 @@
             document.getElementById('win-rate').innerText = (total > 0 ? (d.wins / total * 100) : 0).toFixed(1) + '%';
 
             if (d.last_trained) {
-                 document.querySelector('#section-dash p.text-muted').innerText = 'Neural network active. Last Retrained: ' + d.last_trained;
+                let displayDate = "";
+                if (typeof d.last_trained === 'object') {
+                    // Show last trained symbol if any
+                    const symbols = Object.keys(d.last_trained);
+                    if (symbols.length > 0) {
+                        const lastSym = symbols[symbols.length - 1];
+                        displayDate = `${lastSym} (${d.last_trained[lastSym]})`;
+                    }
+                } else {
+                    displayDate = d.last_trained;
+                }
+                if (displayDate) {
+                    document.querySelector('#section-dash p.text-muted').innerText = 'Neural network active. Last Retrained: ' + displayDate;
+                }
             }
         }
 

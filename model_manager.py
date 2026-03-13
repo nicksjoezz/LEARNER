@@ -123,12 +123,12 @@ class ModelManager:
 
     async def startup_sync(self):
         """Startup synchronization: processes default symbol R_50."""
-        async with self.training_lock:
-            if self.is_initial_training: return
-            self.is_initial_training = True
+        if self.is_initial_training: return
+        self.is_initial_training = True
 
         try:
             self.log("Starting startup sync for default symbol (R_50)...")
+            # ensure_symbol_ready handles its own locking
             await self.ensure_symbol_ready('R_50')
             self.log("Startup synchronization finished.")
         finally:

@@ -157,4 +157,4 @@ model_manager.socketio = socketio
 threading.Thread(target=start_bot_loop, args=(bot_loop,), daemon=True).start()
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)

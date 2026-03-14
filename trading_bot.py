@@ -34,12 +34,18 @@ class TradingBot:
         self.log_history.append(full_log)
         if len(self.log_history) > self.max_logs:
             self.log_history.pop(0)
-        # Safely emit using SocketIO across threads
-        self.socketio.emit('log', message)
+        try:
+            # Safely emit using SocketIO across threads
+            self.socketio.emit('log', message)
+        except Exception as e:
+            logging.error(f"SocketIO log error: {e}")
 
     def update_status(self):
-        # Safely emit using SocketIO across threads
-        self.socketio.emit('status_update', self.get_state())
+        try:
+            # Safely emit using SocketIO across threads
+            self.socketio.emit('status_update', self.get_state())
+        except Exception as e:
+            logging.error(f"SocketIO status error: {e}")
 
     def get_state(self):
         return {

@@ -1,192 +1,162 @@
-import asyncio
+import websocket
+import json
+import threading
+import time
 import pandas as pd
 import numpy as np
-import time
-import os
-import json
-import logging
-from deriv_api import DerivAPI
+import asyncio
+from datetime import datetime, timedelta
 from handlers.strategy_handler import StrategyHandler
 from handlers.trade_handler import TradeHandler
-from datetime import datetime
 
 class LiveHandler:
     def __init__(self, bot):
         self.bot = bot
-        self.api = None
+        self.ws = None
         self.history_df = pd.DataFrame()
         self.last_candle_epoch = 0
         self.strategy_handler = StrategyHandler(bot)
         self.trade_handler = TradeHandler(bot)
         self.tick_count = 0
+        self.is_authorized = False
+        self.symbol = ""
+        self.ws_thread = None
         self.loop = asyncio.get_event_loop()
-        self.subscription = None
-        self.debug_mode = True # Always on for now to debug the "stuck" issue
+
+    def log(self, msg):
+        self.bot.log(msg)
 
     async def connect(self, config):
-        try:
-            if self.api:
-                try: await asyncio.wait_for(self.api.disconnect(), timeout=5)
-                except: pass
-
-            self.bot.log(f"DEBUG: Creating DerivAPI instance (App ID: {config.get('app_id', '62845')})")
-            self.api = DerivAPI(app_id=config.get('app_id', '62845'))
-
-            self.bot.log("DEBUG: Authorizing...")
-            auth = await asyncio.wait_for(self.api.authorize(config['api_token']), timeout=30)
-
-            if 'error' in auth:
-                self.bot.log(f"DEBUG: Auth Error: {auth['error'].get('message')}")
-                return False
-
-            self.bot.balance = float(auth['authorize']['balance'])
-            self.bot.log(f"Connected to Deriv. Balance: ${self.bot.balance:.2f}")
-            return True
-        except Exception as e:
-            self.bot.log(f"Connection error: {e}")
-            return False
-
-    async def subscribe_account(self):
-        try:
-            self.bot.log("Subscribing to account updates...")
-
-            # Use thread-safe wrappers for subscriptions
-            poc_sub = await self.api.subscribe({'proposal_open_contract': 1, 'subscribe': 1})
-            poc_sub.subscribe(
-                on_next=lambda data: self.loop.call_soon_threadsafe(self.handle_contract_update, data),
-                on_error=lambda err: self.loop.call_soon_threadsafe(self.bot.log, f"DEBUG Contract Stream Error: {err}")
-            )
-
-            bal_sub = await self.api.subscribe({'balance': 1, 'subscribe': 1})
-            bal_sub.subscribe(
-                on_next=lambda data: self.loop.call_soon_threadsafe(self.handle_balance_update, data),
-                on_error=lambda err: self.loop.call_soon_threadsafe(self.bot.log, f"DEBUG Balance Stream Error: {err}")
-            )
-            return True
-        except Exception as e:
-            self.bot.log(f"Account subscription error: {e}")
-            return False
-
-    def handle_balance_update(self, data):
-        if self.debug_mode: self.bot.log(f"DEBUG Balance Update: {json.dumps(data)}")
-        if 'balance' in data:
-            self.bot.balance = float(data['balance']['balance'])
-            self.bot.update_status()
-
-    def handle_contract_update(self, data):
-        if self.debug_mode: self.bot.log(f"DEBUG Contract Update: {json.dumps(data)}")
-        if 'proposal_open_contract' in data:
-            self.trade_handler.handle_contract_update(data['proposal_open_contract'])
+        self.config = config
+        self.symbol = config['symbol']
+        return True
 
     async def fetch_history(self, symbol):
-        self.bot.log(f"Fetching initial history for {symbol}...")
+        self.log(f"Fetching initial history for {symbol}...")
         try:
-            params = {
-                'ticks_history': symbol,
-                'end': 'latest',
-                'count': 1000,
-                'granularity': 300,
-                'style': 'candles'
-            }
-            self.bot.log(f"DEBUG: History Request: {json.dumps(params)}")
+            # Use a single direct connection for history fetch
+            ws = websocket.create_connection(f"wss://ws.binaryws.com/websockets/v3?app_id={self.config.get('app_id', '62845')}")
+            ws.send(json.dumps({"authorize": self.config['api_token']}))
+            auth_res = json.loads(ws.recv())
 
-            response = await asyncio.wait_for(self.api.ticks_history(params), timeout=60)
+            if 'error' in auth_res:
+                self.log(f"Auth error during history: {auth_res['error']['message']}")
+                ws.close()
+                return False
 
-            if self.debug_mode:
-                self.bot.log(f"DEBUG: History Response Keys: {list(response.keys())}")
-                if 'error' in response:
-                    self.bot.log(f"DEBUG: History Error: {response['error'].get('message')}")
+            # Request 1000 candles
+            ws.send(json.dumps({
+                "ticks_history": symbol,
+                "end": "latest",
+                "count": 1000,
+                "granularity": 300,
+                "style": "candles"
+            }))
+            hist_res = json.loads(ws.recv())
+            ws.close()
 
-            if 'candles' in response:
-                candles = response['candles']
-                self.bot.log(f"DEBUG: Received {len(candles)} candles from API.")
-
-                df = pd.DataFrame(candles)
+            if 'candles' in hist_res:
+                df = pd.DataFrame(hist_res['candles'])
                 df = df.sort_values('epoch')
-                for col in ['open', 'high', 'low', 'close']:
-                    df[col] = df[col].astype(float)
-
+                for col in ['open', 'high', 'low', 'close']: df[col] = df[col].astype(float)
                 self.history_df = df
-                last_epoch = int(df.iloc[-1]['epoch'])
-                self.bot.log(f"History loaded: {len(df)} candles. Last candle: {time.strftime('%H:%M:%S', time.gmtime(last_epoch))}")
+                self.last_candle_epoch = int(df.iloc[-1]['epoch'])
+                self.log(f"History loaded: {len(df)} candles. Last: {time.ctime(self.last_candle_epoch)}")
                 return True
-            else:
-                self.bot.log(f"History fetch failed: No candles in response.")
         except Exception as e:
-            self.bot.log(f"History fetch error: {e}")
+            self.log(f"History fetch error: {e}")
         return False
 
     async def start_trading(self, symbol):
-        try:
-            self.bot.log(f"Starting tick stream for {symbol}...")
-            self.subscription = await self.api.subscribe({'ticks': symbol, 'subscribe': 1})
+        self.ws_thread = threading.Thread(target=self._run_ws, daemon=True)
+        self.ws_thread.start()
+        return True
 
-            # Bridge the background callback thread to the main event loop thread
-            self.subscription.subscribe(
-                on_next=lambda data: self.loop.call_soon_threadsafe(self.handle_tick_data, data),
-                on_error=lambda err: self.loop.call_soon_threadsafe(self.bot.log, f"DEBUG Tick Stream Error: {err}")
-            )
+    def _run_ws(self):
+        url = f"wss://ws.binaryws.com/websockets/v3?app_id={self.config.get('app_id', '62845')}"
+        self.ws = websocket.WebSocketApp(
+            url,
+            on_open=self.on_open,
+            on_message=self.on_message,
+            on_error=self.on_error,
+            on_close=self.on_close
+        )
+        self.ws.run_forever()
 
-            self.bot.log(f"Tick stream active. Monitoring {symbol}...")
-            return True
-        except Exception as e:
-            self.bot.log(f"Failed to start tick stream: {e}")
-            return False
+    def on_open(self, ws):
+        self.log("WebSocket stream opened.")
+        ws.send(json.dumps({"authorize": self.config['api_token']}))
 
-    def handle_tick_data(self, data):
-        if not self.bot.is_running: return
+    def on_message(self, ws, message):
+        data = json.loads(message)
+        msg_type = data.get('msg_type')
 
-        if self.debug_mode:
-            # Log every 10th tick to avoid cluttering but show activity
-            if self.tick_count % 10 == 0:
-                self.bot.log(f"DEBUG RAW TICK: {json.dumps(data)}")
-
-        if 'tick' in data:
-            tick = data['tick']
-            price = float(tick['quote'])
-            epoch = int(tick['epoch'])
-            candle_start = (epoch // 300) * 300
-
-            if self.history_df.empty:
-                if self.tick_count % 50 == 0:
-                    self.bot.log("DEBUG: history_df empty, skipping tick.")
+        if msg_type == 'authorize':
+            if 'error' in data:
+                self.log(f"Auth error: {data['error']['message']}")
                 return
+            self.log(f"Authorization successful. Balance: ${data['authorize']['balance']}")
+            self.bot.balance = float(data['authorize']['balance'])
+            self.is_authorized = True
+            # Subscriptions
+            ws.send(json.dumps({"balance": 1, "subscribe": 1}))
+            ws.send(json.dumps({"proposal_open_contract": 1, "subscribe": 1}))
+            ws.send(json.dumps({"ticks": self.symbol, "subscribe": 1}))
 
-            last_idx = self.history_df.index[-1]
-            last_candle_epoch = int(self.history_df.iloc[-1]['epoch'])
+        elif msg_type == 'balance':
+            self.bot.balance = float(data['balance']['balance'])
+            self.loop.call_soon_threadsafe(self.bot.update_status)
 
-            if candle_start == last_candle_epoch:
-                # Update current candle
-                self.history_df.at[last_idx, 'close'] = price
-                if price > self.history_df.at[last_idx, 'high']:
-                    self.history_df.at[last_idx, 'high'] = price
-                if price < self.history_df.at[last_idx, 'low']:
-                    self.history_df.at[last_idx, 'low'] = price
-            elif candle_start > last_candle_epoch:
-                # NEW CANDLE DETECTED
-                closed_epoch = last_candle_epoch
-                closed_time = time.strftime('%H:%M:%S', time.gmtime(closed_epoch))
-                self.bot.log(f"CANDLE CLOSED: {closed_time}. New Start: {time.strftime('%H:%M:%S', time.gmtime(candle_start))} Price: {price}")
+        elif msg_type == 'proposal_open_contract':
+            poc = data.get('proposal_open_contract')
+            if poc:
+                self.loop.call_soon_threadsafe(self.trade_handler.handle_contract_update, poc)
 
-                # 1. Add new candle first
-                new_row = pd.DataFrame([{
-                    'epoch': candle_start,
-                    'open': price, 'high': price, 'low': price, 'close': price
-                }])
-                for col in ['open', 'high', 'low', 'close']:
-                    new_row[col] = new_row[col].astype(float)
+        elif msg_type == 'tick':
+            self.handle_tick(data['tick'])
 
-                self.history_df = pd.concat([self.history_df, new_row], ignore_index=True)
-                if len(self.history_df) > 1200:
-                    self.history_df = self.history_df.iloc[-1000:]
+        elif msg_type == 'buy':
+            if 'error' in data:
+                self.log(f"Trade Error: {data['error']['message']}")
+            else:
+                self.log(f"Trade Success: {data['buy']['contract_id']}")
 
-                # 2. Trigger signal check on closed candle (iloc[-2])
-                asyncio.create_task(self.check_signals())
+        elif msg_type == 'sell':
+            self.log(f"Contract Closed: {data['sell']['contract_id']} Profit: {data['sell']['profit']}")
 
-            self.tick_count += 1
-            if self.tick_count % 50 == 0:
-                self.bot.log(f"Bot Heartbeat: {price} ({self.tick_count} ticks)")
-                asyncio.create_task(self.api.ping({'ping': 1}))
+    def handle_tick(self, tick):
+        price = float(tick['quote'])
+        epoch = int(tick['epoch'])
+        candle_start = (epoch // 300) * 300
+
+        if self.history_df.empty: return
+
+        last_idx = self.history_df.index[-1]
+        last_candle_epoch = int(self.history_df.iloc[-1]['epoch'])
+
+        if candle_start == last_candle_epoch:
+            # Update current
+            self.history_df.at[last_idx, 'close'] = price
+            if price > self.history_df.at[last_idx, 'high']: self.history_df.at[last_idx, 'high'] = price
+            if price < self.history_df.at[last_idx, 'low']: self.history_df.at[last_idx, 'low'] = price
+        elif candle_start > last_candle_epoch:
+            # New candle detected
+            self.log(f"CANDLE CLOSED: {time.strftime('%H:%M:%S', time.gmtime(last_candle_epoch))}")
+
+            new_row = pd.DataFrame([{'epoch': candle_start, 'open': price, 'high': price, 'low': price, 'close': price}])
+            for col in ['open', 'high', 'low', 'close']: new_row[col] = new_row[col].astype(float)
+            self.history_df = pd.concat([self.history_df, new_row], ignore_index=True)
+            if len(self.history_df) > 1000: self.history_df = self.history_df.iloc[-1000:]
+            self.last_candle_epoch = candle_start
+
+            # Trigger signal check asynchronously on main loop
+            asyncio.run_coroutine_threadsafe(self.check_signals(), self.loop)
+
+        self.tick_count += 1
+        if self.tick_count % 50 == 0:
+            self.log(f"Live Price: {price} ({self.tick_count} ticks)")
+            try: self.ws.send(json.dumps({"ping": 1}))
+            except: pass
 
     async def check_signals(self):
         side = await self.strategy_handler.check_signals(self.history_df)
@@ -195,13 +165,33 @@ class LiveHandler:
 
     async def place_trade(self, side):
         opposite = 'PUT' if side == 'CALL' else 'CALL'
-        await self.trade_handler.close_trades_by_side(opposite, self.api)
-        await self.trade_handler.place_trade(
-            self.api, side, self.bot.config['symbol'], self.bot.config['strategy']
-        )
+
+        # Simple wrapper for the websocket to match trade_handler expectations
+        class WSWrapper:
+            def __init__(self, ws): self.ws = ws
+            async def buy(self, params):
+                try: self.ws.send(json.dumps(params))
+                except: pass
+                return {}
+            async def sell(self, params):
+                try: self.ws.send(json.dumps(params))
+                except: pass
+                return {}
+
+        await self.trade_handler.close_trades_by_side(opposite, WSWrapper(self.ws))
+        await self.trade_handler.place_trade(WSWrapper(self.ws), side, self.symbol, self.bot.config['strategy'])
+
+    def on_error(self, ws, error):
+        self.log(f"Stream Error: {error}")
+
+    def on_close(self, ws, close_status_code, close_msg):
+        self.log(f"Stream Closed. Reconnecting in 5s...")
+        if self.bot.is_running:
+            time.sleep(5)
+            # Simple reconnection logic
+            self.start_trading(self.symbol)
 
     async def disconnect(self):
-        if self.api:
-            try: await asyncio.wait_for(self.api.disconnect(), timeout=5)
-            except: pass
-            self.api = None
+        if self.ws:
+            self.ws.close()
+            self.ws = None

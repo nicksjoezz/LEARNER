@@ -6,5 +6,5 @@ pandas
 numpy
 scikit-learn
 pyyaml
-eventlet
 gunicorn
+websocket-client

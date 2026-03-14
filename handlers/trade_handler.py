@@ -30,64 +30,55 @@ class TradeHandler:
 
     async def place_trade(self, api, side, symbol, strategy_idx):
         try:
-            # Calculate stake based on current balance and config percentage
             raw_amount = self.bot.balance * (float(self.bot.config.get('trade_pc', 1)) / 100.0)
             amount = round(max(raw_amount, 0.35), 2)
-
-            # CRITICAL: Cap stake for demo accounts to avoid 'maximum purchase price' errors
-            # if the account has large synthetic balance.
             if amount > 50: amount = 10.0
 
             self.bot.log(f"PLACING {side} - Stake: ${amount} (Strat {strategy_idx})")
 
-            # Parameters for Rise/Fall (CALL/PUT)
             trade_params = {
-                "buy": 1,
-                "price": amount,
+                "buy": 1, "price": amount,
                 "parameters": {
-                    "amount": amount,
-                    "basis": "stake",
-                    "contract_type": side,
-                    "currency": "USD",
-                    "duration": 15,
-                    "duration_unit": "m",
+                    "amount": amount, "basis": "stake",
+                    "contract_type": side, "currency": "USD",
+                    "duration": 15, "duration_unit": "m",
                     "symbol": symbol
                 }
             }
 
-            r = await asyncio.wait_for(api.buy(trade_params), timeout=20)
+            # Use wait_for only if 'api' is an async object, otherwise just await
+            res = await api.buy(trade_params)
 
-            if 'buy' in r:
-                cid = r['buy']['contract_id']
+            # If the response is handled in on_message, we might not get it here
+            # But for standard DerivAPI it returns the dict.
+            if res and 'buy' in res:
+                cid = res['buy']['contract_id']
                 self.bot.total_trades += 1
                 self.active_contracts[cid] = {'side': side, 'stake': amount, 'time': time.time()}
-                self.bot.save_state()
                 self.bot.log(f"Trade placed SUCCESS: {cid}")
                 return cid
-            else:
-                err_msg = r.get('error', {}).get('message', 'Unknown error')
-                self.bot.log(f"Trade placement FAILED: {err_msg}")
         except Exception as e:
-            self.bot.log(f"Trade placement ERROR: {e}")
+            self.bot.log(f"Trade placement error: {e}")
         return None
 
     async def close_trades_by_side(self, side, api=None):
-        """Closes all open trades of a specific type (reversal logic)."""
         if not api: return
         for cid, details in list(self.active_contracts.items()):
             if details['side'] == side:
-                self.bot.log(f"REVERSAL: Closing {side} contract {cid} for opposite signal.")
+                self.bot.log(f"REVERSAL: Closing {side} contract {cid}")
                 try:
-                    # Deriv sell requires contract_id
                     await api.sell({"sell": cid, "price": 0})
                 except Exception as e:
-                    self.bot.log(f"Reversal sell error for {cid}: {e}")
+                    self.bot.log(f"Reversal error: {e}")
 
     def handle_contract_update(self, contract):
+        if not contract: return
+        cid = contract.get('contract_id')
+        if not cid: return
+
         if contract.get('is_sold'):
-            status = contract.get('status') # won, lost
-            profit = float(contract['profit'])
-            cid = contract['contract_id']
+            status = contract.get('status')
+            profit = float(contract.get('profit', 0))
 
             if cid in self.active_contracts:
                 side = self.active_contracts[cid]['side']
@@ -99,13 +90,17 @@ class TradeHandler:
                     self.bot.log(f"LOSS: {side} trade lost. -${abs(profit):.2f}")
 
                 self.trade_history.append({
-                    'id': cid,
-                    'side': side,
-                    'profit': profit,
-                    'status': status,
-                    'time': time.time()
+                    'id': cid, 'side': side, 'profit': profit, 'status': status, 'time': time.time()
                 })
                 del self.active_contracts[cid]
                 self.save_trade_history()
                 self.bot.save_state()
+                self.bot.update_status()
+        else:
+            # New contract opened?
+            if cid not in self.active_contracts and contract.get('status') == 'open':
+                side = contract.get('contract_type')
+                amount = float(contract.get('buy_price', 0))
+                self.active_contracts[cid] = {'side': side, 'stake': amount, 'time': time.time()}
+                self.bot.total_trades += 1
                 self.bot.update_status()

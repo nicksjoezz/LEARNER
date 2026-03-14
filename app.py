@@ -1,6 +1,3 @@
-import eventlet
-eventlet.monkey_patch()
-
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 import json, os, asyncio, threading, pandas as pd
@@ -13,8 +10,8 @@ from indicators import add_indicators
 from config_utils import load_config, save_config
 
 app = Flask(__name__)
-# Standard Flask-SocketIO initialization
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
+# Switch to threading async mode
+socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*")
 bot = TradingBot(socketio)
 
 @app.route('/')
@@ -37,14 +34,13 @@ def toggle_bot():
         if not c.get('api_token'): return jsonify({'status': 'error', 'message': 'No API Token'})
 
         async def start_sequence():
-            # Ensure symbol is ready before starting live bot
             if await model_manager.ensure_symbol_ready(c['symbol']):
                 await bot.start(c)
             else:
                 bot.log(f"Failed to prepare {c['symbol']} for live trading.")
 
         asyncio.run_coroutine_threadsafe(start_sequence(), bot_loop)
-    return jsonify({'status': 'success'})
+    return jsonify({'success': True})
 
 @app.route('/get_system_status')
 def get_sys_status():
@@ -87,14 +83,13 @@ def run_bt():
     d = request.json
 
     async def bt_sequence():
-        # Ensure symbol is ready before backtesting
         if await model_manager.ensure_symbol_ready(d['symbol']):
             return await get_bt_data(d['symbol'], d['days'])
         return pd.DataFrame()
 
     try:
         future = asyncio.run_coroutine_threadsafe(bt_sequence(), bot_loop)
-        df_raw = future.result(timeout=180) # Increased timeout for training
+        df_raw = future.result(timeout=300)
     except Exception as e:
         return jsonify({'error': str(e), 'results': []})
 
@@ -105,21 +100,14 @@ def run_bt():
     params = [(1, 10), (2, 20), (3, 30), (1, 20), (2, 10), (3, 20), (1, 30), (2, 30), (3, 10), (1.5, 15)]
 
     balance = float(d.get('balance', 1000))
-    # Use risk from request if available, else from config
     risk_pc = float(d.get('risk_pc', load_config().get('trade_pc', 1)))
 
     for i, (a, c) in enumerate(params):
         s_idx = i + 1
         df_sig = ut_bot(df, a=a, c=c)
-
-        # Raw results
         tr_raw = Backtester(df_sig).run()
         raw_bal, raw_prof, raw_mcl = simulate_financials(tr_raw, balance, risk_pc)
-
-        # ML Filtered results
-        m_status = model_manager.get_model_status(d['symbol'], s_idx)
         ml = model_manager.get_model(d['symbol'], s_idx)
-
         if ml:
             df_filtered = ml.filter_signals(df_sig)
             tr_ml = Backtester(df_filtered).run()
@@ -138,7 +126,7 @@ def run_bt():
                 'max_consec_losses': int(raw_mcl)
             },
             'ml': {
-                'status': m_status,
+                'status': model_manager.get_model_status(d['symbol'], s_idx),
                 'win_rate': float(tr_ml['win'].mean()) if not tr_ml.empty else 0,
                 'trades': int(len(tr_ml)),
                 'final_balance': float(ml_bal),

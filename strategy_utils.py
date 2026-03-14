@@ -66,53 +66,64 @@ class Backtester:
         self.exit_candles = exit_candles
 
     def run(self):
-        trades = []
         df = self.df.reset_index(drop=True)
+        n = len(df)
+        limit = n - self.exit_candles - 1
 
-        for i in range(len(df) - self.exit_candles - 1):
-            if df['buy'].iloc[i]:
-                # Entry at next candle open
-                entry_idx = i + 1
-                exit_idx = i + self.exit_candles
+        if limit <= 0:
+            return pd.DataFrame()
 
-                entry_price = df['open'].iloc[entry_idx]
-                exit_price = df['close'].iloc[exit_idx]
+        # Vectorized identification of signal indices
+        buy_indices = np.where(df['buy'].values[:limit])[0]
+        sell_indices = np.where(df['sell'].values[:limit])[0]
 
-                profit = exit_price - entry_price
-                win = profit > 0
+        all_trades = []
 
-                trades.append({
-                    'type': 'buy',
-                    'entry_time': df['epoch'].iloc[entry_idx],
-                    'entry_price': entry_price,
-                    'exit_time': df['epoch'].iloc[exit_idx],
-                    'exit_price': exit_price,
-                    'profit': profit,
-                    'win': win
-                })
+        # Avoid unnecessary computations if no signals
+        if len(buy_indices) > 0:
+            entry_idx = buy_indices + 1
+            exit_idx = buy_indices + self.exit_candles
 
-            elif df['sell'].iloc[i]:
-                # Entry at next candle open
-                entry_idx = i + 1
-                exit_idx = i + self.exit_candles
+            # Using .values for maximum speed (NumPy level)
+            epochs = df['epoch'].values
+            opens = df['open'].values
+            closes = df['close'].values
 
-                entry_price = df['open'].iloc[entry_idx]
-                exit_price = df['close'].iloc[exit_idx]
+            buy_trades = pd.DataFrame({
+                'type': 'buy',
+                'entry_time': epochs[entry_idx],
+                'entry_price': opens[entry_idx],
+                'exit_time': epochs[exit_idx],
+                'exit_price': closes[exit_idx],
+            })
+            buy_trades['profit'] = buy_trades['exit_price'] - buy_trades['entry_price']
+            buy_trades['win'] = buy_trades['profit'] > 0
+            all_trades.append(buy_trades)
 
-                profit = entry_price - exit_price
-                win = profit > 0
+        if len(sell_indices) > 0:
+            entry_idx = sell_indices + 1
+            exit_idx = sell_indices + self.exit_candles
 
-                trades.append({
-                    'type': 'sell',
-                    'entry_time': df['epoch'].iloc[entry_idx],
-                    'entry_price': entry_price,
-                    'exit_time': df['epoch'].iloc[exit_idx],
-                    'exit_price': exit_price,
-                    'profit': profit,
-                    'win': win
-                })
+            epochs = df['epoch'].values
+            opens = df['open'].values
+            closes = df['close'].values
 
-        return pd.DataFrame(trades)
+            sell_trades = pd.DataFrame({
+                'type': 'sell',
+                'entry_time': epochs[entry_idx],
+                'entry_price': opens[entry_idx],
+                'exit_time': epochs[exit_idx],
+                'exit_price': closes[exit_idx],
+            })
+            sell_trades['profit'] = sell_trades['entry_price'] - sell_trades['exit_price']
+            sell_trades['win'] = sell_trades['profit'] > 0
+            all_trades.append(sell_trades)
+
+        if not all_trades:
+            return pd.DataFrame()
+
+        # Return sorted by time to maintain original behavior
+        return pd.concat(all_trades).sort_values('entry_time').reset_index(drop=True)
 
 def analyze_performance(trades_df, interval_days=60):
     if trades_df.empty:

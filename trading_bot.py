@@ -240,21 +240,32 @@ class TradingBot:
                 self.log(f"OHLC Subscription active for {symbol}.")
                 self.ohlc_subscription.subscribe(self.handle_ohlc_update)
 
-                # Keep the task alive and monitor connection
+                # Keep the task alive and monitor connection with heartbeats
+                last_ping = time.time()
                 while self.is_running:
                     await asyncio.sleep(5)
+                    # 30-second heartbeat ping
+                    if time.time() - last_ping > 30:
+                        try:
+                            await asyncio.wait_for(self.api.ping(), timeout=5)
+                            last_ping = time.time()
+                        except Exception as e:
+                            self.log(f"Heartbeat failed: {e}")
+                            raise ConnectionError("WebSocket heartbeat failed")
 
             except asyncio.CancelledError:
                 self.log("OHLC subscription cancelled.")
                 break
-            except Exception as e:
-                self.log(f"OHLC subscription error: {e}. Retrying in 10s...")
+            except (Exception, ConnectionError, asyncio.TimeoutError) as e:
+                self.log(f"OHLC subscription error: {e}. Attempting reconnection in 10s...")
                 await asyncio.sleep(10)
                 if not self.is_running: break
-                # Re-authorize if connection dropped
+
+                # Re-authorize and reconnect
                 try:
                     await self.connect()
-                except: pass
+                except Exception as conn_err:
+                    self.log(f"Reconnection attempt failed: {conn_err}")
 
     def handle_ohlc_update(self, data):
         if 'error' in data:
@@ -266,17 +277,25 @@ class TradingBot:
             candle_epoch = int(ohlc['open_time'])
 
             # Real-time update of history_df
-            new_candle = {
-                'epoch': int(ohlc['open_time']),
+            new_candle_data = {
+                'epoch': candle_epoch,
                 'open': float(ohlc['open']),
                 'high': float(ohlc['high']),
                 'low': float(ohlc['low']),
                 'close': float(ohlc['close'])
             }
-            new_row = pd.DataFrame([new_candle])
-            self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch')
-            if len(self.history_df) > 500:
-                self.history_df = self.history_df.iloc[-500:]
+
+            # Optimization: Efficient in-place update if epoch already exists (current building candle)
+            if not self.history_df.empty and candle_epoch == self.history_df.iloc[-1]['epoch']:
+                # Update last row in-place
+                for col, val in new_candle_data.items():
+                    self.history_df.iloc[-1, self.history_df.columns.get_loc(col)] = val
+            else:
+                # Append new row
+                new_row = pd.DataFrame([new_candle_data])
+                self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch')
+                if len(self.history_df) > 500:
+                    self.history_df = self.history_df.iloc[-500:]
 
             # Detect new candle (candle closed)
             if candle_epoch > self.last_candle_epoch:

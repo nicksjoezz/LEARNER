@@ -82,20 +82,21 @@ class MLFilter:
 
         for side in ['buy', 'sell']:
             # Get positional indices where signal is true
-            indices = df_work.index[df_work[side]].tolist()
-            if not indices: continue
+            mask = df_work[side].values
+            indices = np.where(mask)[0]
+            if len(indices) == 0: continue
 
             features = self.prepare_features(df_work, indices)
             if len(features) == 0: continue
 
             preds = self.model.predict(features)
-            for i, idx in enumerate(indices):
-                if preds[i] == 0:
-                    df_work.at[idx, side] = False
 
-        # Restore the original index labels if they were important
-        # Actually, Backtester uses the df as is.
-        # But to be safe, we return the df with same index labels as input.
+            # Vectorized signal filtering: set signal to False where prediction is 0
+            filtered_mask = mask.copy()
+            filtered_mask[indices] = (preds == 1)
+            df_work[side] = filtered_mask
+
+        # Restore the original index labels
         df_work.index = df.index
         return df_work
 

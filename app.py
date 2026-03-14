@@ -4,6 +4,7 @@ import json, os, asyncio, threading, pandas as pd
 from datetime import datetime, timedelta
 from trading_bot import TradingBot
 from model_manager import model_manager
+from ml_filter import MLFilter
 from deriv_api import DerivAPI
 from strategy_utils import ut_bot, Backtester, calculate_max_consecutive_losses, simulate_financials
 from indicators import add_indicators

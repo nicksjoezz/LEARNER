@@ -51,51 +51,46 @@ def get_sys_status():
         'logs': bot.log_history
     })
 
-async def get_bt_data(symbol, days):
-    fp = os.path.join('data', f"{symbol}_5m_2y.csv")
-    ts = int((datetime.now() - timedelta(days=int(days))).timestamp())
-
-    if os.path.exists(fp):
-        try:
-            df = pd.read_csv(fp)
-            if not df.empty and df['epoch'].min() <= ts:
-                return df[df['epoch'] >= ts]
-        except: pass
-
-    c = load_config()
-    api = DerivAPI(app_id=c.get('app_id'))
-    end, candles = int(datetime.now().timestamp()), []
-    curr = end
-    while curr > ts:
-        try:
-            r = await api.ticks_history({'ticks_history': symbol, 'end': str(curr), 'count': 5000, 'granularity': 300, 'style': 'candles'})
-            if 'candles' not in r or not r['candles']: break
-            candles.extend(r['candles'][::-1])
-            curr = r['candles'][0]['epoch'] - 1
-            if len(candles) > (int(days) * 288 + 500): break
-        except: break
-    await api.disconnect()
-    if not candles: return pd.DataFrame()
-    return pd.DataFrame(candles).drop_duplicates(subset=['epoch']).sort_values('epoch')
 
 @app.route('/run_backtest', methods=['POST'])
 def run_bt():
     d = request.json
+    symbol = d['symbol']
+    bt_days = int(d['days'])
 
-    async def bt_sequence():
-        if await model_manager.ensure_symbol_ready(d['symbol']):
-            return await get_bt_data(d['symbol'], d['days'])
+    async def get_all_data():
+        if await model_manager.ensure_symbol_ready(symbol):
+            fp = os.path.join('data', f"{symbol}_5m_2y.csv")
+            if os.path.exists(fp):
+                return pd.read_csv(fp)
         return pd.DataFrame()
 
     try:
-        future = asyncio.run_coroutine_threadsafe(bt_sequence(), bot_loop)
-        df_raw = future.result(timeout=300)
+        future = asyncio.run_coroutine_threadsafe(get_all_data(), bot_loop)
+        df_full = future.result(timeout=300)
     except Exception as e:
-        return jsonify({'error': str(e), 'results': []})
+        return jsonify({'error': f"Data load error: {e}", 'results': []})
 
-    if df_raw.empty: return jsonify({'results': []})
+    if df_full.empty: return jsonify({'error': 'No historical data available for this symbol', 'results': []})
 
-    df = add_indicators(df_raw)
+    # Restructure for ML Fairness
+    ts_cutoff = int((datetime.now() - timedelta(days=bt_days)).timestamp())
+
+    # 1. Backtest Set (The period we are testing)
+    df_bt_raw = df_full[df_full['epoch'] >= ts_cutoff].copy()
+    # 2. Training Set (Everything BEFORE the backtest period)
+    df_train_raw = df_full[df_full['epoch'] < ts_cutoff].copy()
+
+    if len(df_train_raw) < 1000:
+        return jsonify({'error': 'Insufficient history for fair ML training (Need > 1000 candles before backtest start)', 'results': []})
+
+    # Calculate indicators on the FULL dataset first to avoid "cold start" NaNs in the backtest period
+    df_all = add_indicators(df_full)
+
+    # Slice the enriched data
+    df_train = df_all[df_all['epoch'] < ts_cutoff].copy()
+    df_bt = df_all[df_all['epoch'] >= ts_cutoff].copy()
+
     res = []
     params = [(1, 10), (2, 20), (3, 30), (1, 20), (2, 10), (3, 20), (1, 30), (2, 30), (3, 10), (1.5, 15)]
 
@@ -104,17 +99,31 @@ def run_bt():
 
     for i, (a, c) in enumerate(params):
         s_idx = i + 1
-        df_sig = ut_bot(df, a=a, c=c)
-        tr_raw = Backtester(df_sig).run()
+
+        # --- Fair ML Training Phase ---
+        # Generate signals on training data ONLY
+        df_sig_train = ut_bot(df_train, a=a, c=c)
+        tr_train = Backtester(df_sig_train).run()
+
+        fair_ml = MLFilter()
+        is_ready = fair_ml.train(df_train, tr_train)
+
+        # --- Backtest Phase ---
+        # Raw results on BT period
+        df_sig_bt = ut_bot(df_bt, a=a, c=c)
+        tr_raw = Backtester(df_sig_bt).run()
         raw_bal, raw_prof, raw_mcl = simulate_financials(tr_raw, balance, risk_pc)
-        ml = model_manager.get_model(d['symbol'], s_idx)
-        if ml:
-            df_filtered = ml.filter_signals(df_sig)
+
+        # ML Filtered results on BT period using the 'Fair' model
+        if is_ready:
+            df_filtered = fair_ml.filter_signals(df_sig_bt)
             tr_ml = Backtester(df_filtered).run()
             ml_bal, ml_prof, ml_mcl = simulate_financials(tr_ml, balance, risk_pc)
+            m_status = 'ready'
         else:
             tr_ml = pd.DataFrame()
             ml_bal, ml_prof, ml_mcl = 0.0, 0.0, 0
+            m_status = 'insufficient_data'
 
         res.append({
             'name': f"Strategy {s_idx}",
@@ -126,7 +135,7 @@ def run_bt():
                 'max_consec_losses': int(raw_mcl)
             },
             'ml': {
-                'status': model_manager.get_model_status(d['symbol'], s_idx),
+                'status': m_status,
                 'win_rate': float(tr_ml['win'].mean()) if not tr_ml.empty else 0,
                 'trades': int(len(tr_ml)),
                 'final_balance': float(ml_bal),

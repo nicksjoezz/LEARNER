@@ -5,3 +5,7 @@
 ## 2025-03-12 - [Deriv API Connection Resilience]
 **Learning:** Concurrent start/stop calls and rapid reconnections to the Deriv API via `python-deriv-api` can lead to "Bad file descriptor" errors and race conditions.
 **Action:** Implement an `asyncio.Lock` to serialize initialization and connection attempts, and ensure explicit cleanup of existing connections before establishing new ones.
+
+## 2025-03-14 - [Fair ML Backtesting Performance]
+**Learning:** Eliminating look-ahead bias in ML trading bots requires on-demand training using only out-of-sample data. This introduces a significant CPU bottleneck during backtest requests as multiple models must be fitted sequentially.
+**Action:** Pre-calculate indicators on the entire dataset once, then slice for training/testing. Use efficient training data sizes (e.g., last 1-2 years) to balance model accuracy and backtest responsiveness.

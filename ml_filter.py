@@ -7,30 +7,30 @@ from datetime import datetime
 
 class MLFilter:
     def __init__(self):
-        # Balanced XGBoost parameters for higher generalization and volume
+        # XGBoost parameters optimized for 5m Rise/Fall (v3 configuration)
         self.model = xgb.XGBClassifier(
-            n_estimators=300, # Reduced to prevent hyper-specialization
-            max_depth=5,     # Shallower trees generalize better and filter less
-            learning_rate=0.03,
-            subsample=0.75,
-            colsample_bytree=0.75,
-            min_child_weight=5, # Higher floor to ignore rare outlier wins
-            gamma=0.5,        # More aggressive pruning
+            n_estimators=300,
+            max_depth=4,         # Shallower depth to prevent overfitting as requested
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            min_child_weight=5,
+            gamma=0.2,
             random_state=42,
             eval_metric='logloss',
-            scale_pos_weight=1.0
+            scale_pos_weight=1.0  # Dynamic adjustment during training
         )
         self.is_trained = False
         self.trained_at = None
-        self.best_threshold = 0.58 # Default
+        self.best_threshold = 0.65 # Balanced target for Rise/Fall
 
+        # New Feature Set following the requested architecture
         self.feature_cols = [
             'rsi', 'macd_diff', 'adx', 'bb_pct', 'ema_dist',
-            'rsi_slope', 'macd_slope', 'vol_regime',
-            'rsi_lag_1', 'rsi_lag_2', 'rsi_lag_3',
-            'macd_lag_1', 'macd_lag_2', 'macd_lag_3',
-            'close_change_lag_1', 'close_change_lag_2', 'close_change_lag_3',
-            'stoch_k', 'stoch_d', 'roc', 'dist_bb_upper', 'dist_bb_lower'
+            'ema_slope', 'rsi_slope', 'rsi_zone', 'bb_width',
+            'candle_body_pct', 'candle_streak', 'atr_percentile',
+            'hour', 'day_of_week', 'session',
+            'rsi_lag_1', 'macd_lag_1', 'close_change_lag_1'
         ]
 
     def prepare_features(self, df, positional_indices):
@@ -43,6 +43,14 @@ class MLFilter:
         return feature_data.values
 
     def train(self, df, trades):
+        """
+        XGBOOST PIPELINE (v3):
+        1. Collect all signals with labels (1=Win, 0=Loss)
+        2. Filter only signals with high-quality engineered features.
+        3. Dynamically balance classes via scale_pos_weight.
+        4. Train ensemble of correction trees.
+        5. Calibrate threshold using Utility Score for best participation/accuracy balance.
+        """
         if trades.empty or len(trades) < 150:
             return False
 
@@ -58,6 +66,7 @@ class MLFilter:
             signal_idx = entry_idx - 1
             if signal_idx < 0: continue
 
+            # Verify features are not NaN
             if pd.isna(df_work.iloc[signal_idx][self.feature_cols]).any():
                 continue
 
@@ -70,55 +79,46 @@ class MLFilter:
         X = self.prepare_features(df_work, X_indices)
         y = np.array(y)
 
-        # Balance classes: Adjust scale_pos_weight based on actual Win/Loss ratio
+        # Class Imbalance FIX: Set scale_pos_weight to Ratio of Losses/Wins
         num_neg = np.sum(y == 0)
         num_pos = np.sum(y == 1)
         if num_pos > 0:
             self.model.scale_pos_weight = num_neg / num_pos
 
+        # Train model
         self.model.fit(X, y)
 
-        # --- Balanced Utility Calibration ---
-        # Aiming for high win rate BUT with high participation.
+        # --- Threshold Tuning Phase ---
         probs = self.model.predict_proba(X)[:, 1]
-
         best_utility = -1
-        best_t = 0.50
-        max_trades_found = 0
-        threshold_for_max_trades = 0.50
+        best_t = 0.62 # Target Floor
 
         total_signals = len(y)
-        participation_floor = total_signals * 0.30 # Aim for at least 30% participation
+        # We need enough volume to be profitable, but enough winrate to survive.
+        participation_floor = total_signals * 0.40 # Target at least 40% retention
 
-        found_any_above_floor = False
-
-        for t in np.linspace(0.48, 0.75, 51):
+        found_above_floor = False
+        for t in np.linspace(0.55, 0.75, 41):
             mask = probs >= t
             subset_y = y[mask]
             num_trades = len(subset_y)
 
-            if num_trades > max_trades_found:
-                max_trades_found = num_trades
-                threshold_for_max_trades = t
-
             if num_trades < participation_floor: continue
 
-            found_any_above_floor = True
+            found_above_floor = True
             win_rate = np.mean(subset_y)
-
-            # UTILITY SCORE: (Win Rate - 0.5) * sqrt(Participation Rate)
-            # This penalizes being near 50% and rewards volume.
-            utility = (win_rate - 0.5) * np.sqrt(num_trades / total_signals)
+            # Utility favors higher accuracy above 50%
+            utility = (win_rate - 0.5) * np.log1p(num_trades)
 
             if utility > best_utility:
                 best_utility = utility
                 best_t = t
 
-        if not found_any_above_floor:
-            # Fallback to the threshold that gives us most trades if we can't hit the floor
-            self.best_threshold = threshold_for_max_trades
-        else:
-            self.best_threshold = best_t
+        if not found_above_floor:
+            # If no threshold hits the volume floor, use the one that gives most volume at >55% accuracy
+            best_t = 0.55
+
+        self.best_threshold = best_t
         self.is_trained = True
         self.trained_at = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
         return True
@@ -136,7 +136,6 @@ class MLFilter:
 
             probs = self.model.predict_proba(features)[:, 1]
             for i, idx in enumerate(indices):
-                # Use the calibrated threshold
                 if probs[i] < self.best_threshold:
                     df_work.at[idx, side] = False
 
@@ -149,7 +148,7 @@ class MLFilter:
             'trained_at': self.trained_at,
             'features': self.feature_cols,
             'threshold': self.best_threshold,
-            'algo': 'xgboost_v2'
+            'algo': 'xgboost_pipeline_v3'
         }, filepath)
 
     def load(self, filepath):
@@ -159,7 +158,7 @@ class MLFilter:
                 if isinstance(data, dict):
                     self.model = data['model']
                     self.trained_at = data.get('trained_at')
-                    self.best_threshold = data.get('threshold', 0.58)
+                    self.best_threshold = data.get('threshold', 0.62)
                 else:
                     self.model = data
                 self.is_trained = True

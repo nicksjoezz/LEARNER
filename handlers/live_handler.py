@@ -33,9 +33,12 @@ class LiveHandler:
 
     async def fetch_history(self, symbol):
         self.log(f"Fetching initial history for {symbol}...")
+        return await asyncio.to_thread(self._fetch_history_sync, symbol)
+
+    def _fetch_history_sync(self, symbol):
         try:
             # Use a single direct connection for history fetch
-            ws = websocket.create_connection(f"wss://ws.binaryws.com/websockets/v3?app_id={self.config.get('app_id', '62845')}")
+            ws = websocket.create_connection(f"wss://ws.binaryws.com/websockets/v3?app_id={self.config.get('app_id', '62845')}", timeout=30)
             ws.send(json.dumps({"authorize": self.config['api_token']}))
             auth_res = json.loads(ws.recv())
 
@@ -67,7 +70,7 @@ class LiveHandler:
             self.log(f"History fetch error: {e}")
         return False
 
-    async def start_trading(self, symbol):
+    def start_trading(self, symbol):
         self.ws_thread = threading.Thread(target=self._run_ws, daemon=True)
         self.ws_thread.start()
         return True

@@ -91,7 +91,7 @@ class TradingBot:
                 if await self.live_handler.connect(config):
                     # Fetch history using the simplified method
                     if await self.live_handler.fetch_history(config['symbol']):
-                        if await self.live_handler.start_trading(config['symbol']):
+                        if self.live_handler.start_trading(config['symbol']):
                             self.log("Bot initialization complete and running LIVE.")
                             self.update_status()
                             return

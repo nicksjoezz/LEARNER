@@ -1,6 +1,5 @@
 import asyncio
 import pandas as pd
-import numpy as np
 import time
 from deriv_api import DerivAPI
 from strategy_utils import ut_bot
@@ -70,6 +69,10 @@ class TradingBot:
 
             self.log("Authorizing...")
             auth = await asyncio.wait_for(self.api.authorize(self.config['api_token']), timeout=20)
+
+            if 'error' in auth:
+                self.log(f"Authorization failed: {auth['error'].get('message')}")
+                return False
 
             self.balance = float(auth['authorize']['balance'])
             self.log(f"Connected to Deriv. Balance: ${self.balance:.2f}")
@@ -199,6 +202,11 @@ class TradingBot:
                 'granularity': 300,
                 'style': 'candles'
             }), timeout=60)
+
+            if 'error' in response:
+                self.log(f"API Error fetching history: {response['error'].get('message')}")
+                return
+
             if 'candles' in response:
                 self.history_df = pd.DataFrame(response['candles'])
                 self.last_candle_epoch = int(self.history_df.iloc[-1]['epoch'])
@@ -240,9 +248,18 @@ class TradingBot:
                 self.log(f"OHLC Subscription active for {symbol}.")
                 self.ohlc_subscription.subscribe(self.handle_ohlc_update)
 
-                # Keep the task alive and monitor connection
+                # Keep the task alive and monitor connection with 30s heartbeat
+                ping_counter = 0
                 while self.is_running:
                     await asyncio.sleep(5)
+                    ping_counter += 5
+                    if ping_counter >= 30:
+                        try:
+                            await asyncio.wait_for(self.api.ping({'ping': 1}), timeout=10)
+                            ping_counter = 0
+                        except Exception as e:
+                            self.log(f"Heartbeat failed: {e}")
+                            raise ConnectionError("WebSocket connection lost")
 
             except asyncio.CancelledError:
                 self.log("OHLC subscription cancelled.")
@@ -253,8 +270,11 @@ class TradingBot:
                 if not self.is_running: break
                 # Re-authorize if connection dropped
                 try:
-                    await self.connect()
-                except: pass
+                    success = await self.connect()
+                    if not success:
+                        self.log("Reconnection attempt failed. Will retry in next loop.")
+                except Exception as ex:
+                    self.log(f"Reconnection exception: {ex}")
 
     def handle_ohlc_update(self, data):
         if 'error' in data:
@@ -265,18 +285,23 @@ class TradingBot:
             ohlc = data['ohlc']
             candle_epoch = int(ohlc['open_time'])
 
-            # Real-time update of history_df
-            new_candle = {
-                'epoch': int(ohlc['open_time']),
-                'open': float(ohlc['open']),
-                'high': float(ohlc['high']),
-                'low': float(ohlc['low']),
-                'close': float(ohlc['close'])
-            }
-            new_row = pd.DataFrame([new_candle])
-            self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch')
-            if len(self.history_df) > 500:
-                self.history_df = self.history_df.iloc[-500:]
+            # Real-time update of history_df - Optimized with in-place updates
+            new_candle_data = [
+                int(ohlc['open_time']),
+                float(ohlc['open']),
+                float(ohlc['high']),
+                float(ohlc['low']),
+                float(ohlc['close'])
+            ]
+
+            if not self.history_df.empty and candle_epoch == self.history_df.iloc[-1]['epoch']:
+                # Update current building candle in-place using label-based assignment for safety
+                self.history_df.loc[self.history_df.index[-1], ['epoch', 'open', 'high', 'low', 'close']] = new_candle_data
+            else:
+                new_row = pd.DataFrame([new_candle_data], columns=['epoch', 'open', 'high', 'low', 'close'])
+                self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch')
+                if len(self.history_df) > 500:
+                    self.history_df = self.history_df.iloc[-500:]
 
             # Detect new candle (candle closed)
             if candle_epoch > self.last_candle_epoch:
@@ -327,7 +352,7 @@ class TradingBot:
                         self.log(f"NEURAL FILTER: SIGNAL PASSED. Executing {side} trade.")
                         await self.place_trade('CALL' if buy_triggered else 'PUT')
                     else:
-                        self.log(f"NEURAL FILTER: SIGNAL BLOCKED (Low probability).")
+                        self.log("NEURAL FILTER: SIGNAL BLOCKED (Low probability).")
                 else:
                     status = model_manager.get_model_status(symbol, strategy_idx)
                     self.log(f"ML filter status for {symbol} Strat {strategy_idx} is {status}. Executing raw {side} trade.")

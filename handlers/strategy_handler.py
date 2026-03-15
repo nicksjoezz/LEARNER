@@ -24,6 +24,13 @@ class StrategyHandler:
             # Indicator calculation
             df = history_df.copy()
             df = add_indicators(df)
+
+            # --- DERIV RISE/FALL OPTIMIZATION: Multi-Timeframe Trend Filter ---
+            # Only take signals that align with the EMA 200 trend
+            # EMA 200 is used as a global trend anchor
+            last_candle = df.iloc[-1]
+            global_trend = 'UP' if last_candle['close'] > last_candle['ema_200'] else 'DOWN'
+
             df = ut_bot(df, a=a, c=c)
 
             # Check signal on the last closed candle (index -2)
@@ -34,7 +41,13 @@ class StrategyHandler:
             closed_candle_time = time.strftime('%H:%M:%S', time.gmtime(raw_sig['epoch']))
             if buy_triggered or sell_triggered:
                 side = 'BUY' if buy_triggered else 'SELL'
-                self.bot.log(f"SIGNAL STATUS: [{closed_candle_time}] Signal found ({side}). Verifying with Neural Filter...")
+
+                # Trend Alignment Check
+                if (buy_triggered and global_trend != 'UP') or (sell_triggered and global_trend != 'DOWN'):
+                    self.bot.log(f"SIGNAL STATUS: [{closed_candle_time}] {side} signal BLOCKED by Trend Filter ({global_trend}).")
+                    return None
+
+                self.bot.log(f"SIGNAL STATUS: [{closed_candle_time}] {side} Signal Verified. Checking Neural Filter...")
 
                 # ML Filter
                 ml = model_manager.get_model(symbol, strategy_idx)
@@ -45,9 +58,9 @@ class StrategyHandler:
                         self.bot.log(f"NEURAL FILTER: [{closed_candle_time}] [PASSED] Executing {side} trade.")
                         return 'CALL' if buy_triggered else 'PUT'
                     else:
-                        self.bot.log(f"NEURAL FILTER: [{closed_candle_time}] [BLOCKED] Signal filtered as low probability.")
+                        self.bot.log(f"NEURAL FILTER: [{closed_candle_time}] [BLOCKED] Low probability.")
                 else:
-                    self.bot.log(f"NEURAL FILTER: [{closed_candle_time}] [INACTIVE] Model not ready. Executing raw {side} signal.")
+                    self.bot.log(f"NEURAL FILTER: [{closed_candle_time}] [INACTIVE] Executing raw signal.")
                     return 'CALL' if buy_triggered else 'PUT'
             else:
                 self.bot.log(f"SIGNAL STATUS: [{closed_candle_time}] No signal found on closed candle.")

@@ -1,18 +1,22 @@
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
+import xgboost as xgb
 import joblib
 import os
 from datetime import datetime
 
 class MLFilter:
     def __init__(self):
-        # Increased trees and complexity for better pattern matching
-        self.model = RandomForestClassifier(
+        # Use XGBoost Classifier for better performance in time-series binary classification
+        self.model = xgb.XGBClassifier(
             n_estimators=200,
-            max_depth=12,
-            min_samples_leaf=5,
-            random_state=42
+            max_depth=6,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            use_label_encoder=False,
+            eval_metric='logloss'
         )
         self.is_trained = False
         self.trained_at = None
@@ -31,11 +35,12 @@ class MLFilter:
             return np.zeros((0, len(self.feature_cols)))
 
         feature_data = df.iloc[valid_indices][self.feature_cols]
+        # XGBoost handles missing values better than RF, but we still fill for consistency
         feature_data = feature_data.fillna(0)
         return feature_data.values
 
     def train(self, df, trades):
-        if trades.empty or len(trades) < 150: # Slightly lower threshold for on-demand training
+        if trades.empty or len(trades) < 150:
             return False
 
         df = df.reset_index(drop=True)
@@ -50,7 +55,6 @@ class MLFilter:
             signal_idx = entry_idx - 1 # Feature state at time of signal
             if signal_idx < 0: continue
 
-            # Check for NaNs in feature set
             if pd.isna(df.iloc[signal_idx][self.feature_cols]).any():
                 continue
 
@@ -77,19 +81,23 @@ class MLFilter:
             features = self.prepare_features(df_work, indices)
             if len(features) == 0: continue
 
-            # PROBABILITY THRESHOLDING: Only take trades with > 60% win confidence
+            # PROBABILITY THRESHOLDING: Only take trades with > 62% win confidence (tighter for XGB)
             probs = self.model.predict_proba(features)
-            # probs is [n_samples, 2] -> index 1 is class 1 (win)
             for i, idx in enumerate(indices):
                 win_prob = probs[i][1]
-                if win_prob < 0.60:
+                if win_prob < 0.62:
                     df_work.at[idx, side] = False
 
         df_work.index = df.index
         return df_work
 
     def save(self, filepath):
-        joblib.dump({'model': self.model, 'trained_at': self.trained_at, 'features': self.feature_cols}, filepath)
+        joblib.dump({
+            'model': self.model,
+            'trained_at': self.trained_at,
+            'features': self.feature_cols,
+            'algo': 'xgboost'
+        }, filepath)
 
     def load(self, filepath):
         if os.path.exists(filepath):

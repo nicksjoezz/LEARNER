@@ -7,20 +7,18 @@ from datetime import datetime
 
 class MLFilter:
     def __init__(self):
-        # Balanced XGBoost parameters with increased regularization
+        # Balanced XGBoost parameters for higher generalization and volume
         self.model = xgb.XGBClassifier(
-            n_estimators=500, # Increased for better convergence
-            max_depth=7,
-            learning_rate=0.02,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            min_child_weight=4, # Prevent learning from noise
-            gamma=0.3,
-            reg_alpha=0.1,
-            reg_lambda=1.0,
+            n_estimators=300, # Reduced to prevent hyper-specialization
+            max_depth=5,     # Shallower trees generalize better and filter less
+            learning_rate=0.03,
+            subsample=0.75,
+            colsample_bytree=0.75,
+            min_child_weight=5, # Higher floor to ignore rare outlier wins
+            gamma=0.5,        # More aggressive pruning
             random_state=42,
             eval_metric='logloss',
-            scale_pos_weight=1.0 # Will be adjusted dynamically during training
+            scale_pos_weight=1.0
         )
         self.is_trained = False
         self.trained_at = None
@@ -80,37 +78,47 @@ class MLFilter:
 
         self.model.fit(X, y)
 
-        # --- Cross-Validated Threshold Calibration ---
-        # We aim for > 80% win rate as requested, but balancing with volume.
-        # We use a leave-one-out style or simple split for speed in backtest.
+        # --- Balanced Utility Calibration ---
+        # Aiming for high win rate BUT with high participation.
         probs = self.model.predict_proba(X)[:, 1]
 
-        best_win_rate = 0
-        best_t = 0.58
-        max_trades = 0
+        best_utility = -1
+        best_t = 0.50
+        max_trades_found = 0
+        threshold_for_max_trades = 0.50
 
-        # High-resolution threshold search
-        for t in np.linspace(0.50, 0.85, 36):
+        total_signals = len(y)
+        participation_floor = total_signals * 0.30 # Aim for at least 30% participation
+
+        found_any_above_floor = False
+
+        for t in np.linspace(0.48, 0.75, 51):
             mask = probs >= t
             subset_y = y[mask]
             num_trades = len(subset_y)
 
-            if num_trades < 10: continue # Minimum trade floor
+            if num_trades > max_trades_found:
+                max_trades_found = num_trades
+                threshold_for_max_trades = t
 
+            if num_trades < participation_floor: continue
+
+            found_any_above_floor = True
             win_rate = np.mean(subset_y)
 
-            # Prioritize Win Rate first (>80% goal), then volume
-            if win_rate > best_win_rate:
-                best_win_rate = win_rate
-                best_t = t
-                max_trades = num_trades
-            elif abs(win_rate - best_win_rate) < 0.01:
-                # If win rates are similar, pick the one with more volume
-                if num_trades > max_trades:
-                    best_t = t
-                    max_trades = num_trades
+            # UTILITY SCORE: (Win Rate - 0.5) * sqrt(Participation Rate)
+            # This penalizes being near 50% and rewards volume.
+            utility = (win_rate - 0.5) * np.sqrt(num_trades / total_signals)
 
-        self.best_threshold = best_t
+            if utility > best_utility:
+                best_utility = utility
+                best_t = t
+
+        if not found_any_above_floor:
+            # Fallback to the threshold that gives us most trades if we can't hit the floor
+            self.best_threshold = threshold_for_max_trades
+        else:
+            self.best_threshold = best_t
         self.is_trained = True
         self.trained_at = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
         return True

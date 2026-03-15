@@ -24,19 +24,31 @@ def add_indicators(df):
 
     # --- ADVANCED FEATURES FOR ML ---
 
-    # 1. Momentum Slopes (Change over last 3 candles)
+    # 1. Momentum Slopes
     df['rsi_slope'] = df['rsi'].diff(3)
     df['macd_slope'] = df['macd_diff'].diff(3)
 
-    # 2. Lagged Features (Market Memory)
+    # 2. Lagged Features
     for lag in range(1, 4):
         df[f'rsi_lag_{lag}'] = df['rsi'].shift(lag)
         df[f'macd_lag_{lag}'] = df['macd_diff'].shift(lag)
         df[f'close_change_lag_{lag}'] = df['close'].pct_change(lag)
 
-    # 3. Volatility Regime (Current ATR vs Average ATR)
+    # 3. Volatility Regime
     df['atr'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
     df['atr_ma'] = df['atr'].rolling(window=50).mean()
     df['vol_regime'] = df['atr'] / (df['atr_ma'] + 1e-9)
+
+    # 4. Stochastic (Finding range-bound similarities)
+    stoch = ta.momentum.StochasticOscillator(df['high'], df['low'], df['close'], window=14, smooth_window=3)
+    df['stoch_k'] = stoch.stoch()
+    df['stoch_d'] = stoch.stoch_signal()
+
+    # 5. Rate of Change (ROC)
+    df['roc'] = ta.momentum.roc(df['close'], window=12)
+
+    # 6. Distance from BB bands (Similarity in overextension)
+    df['dist_bb_upper'] = (df['bb_hband'] - df['close']) / df['close']
+    df['dist_bb_lower'] = (df['close'] - df['bb_lband']) / df['close']
 
     return df

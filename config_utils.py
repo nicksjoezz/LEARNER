@@ -8,7 +8,7 @@ DEFAULT_CONFIG = {
     "symbol": "R_50",
     "strategy": "1",
     "trade_pc": 1.0,
-    "fetch_days": 365
+    "fetch_days": 730
 }
 
 def load_config():

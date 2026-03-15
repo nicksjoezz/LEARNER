@@ -7,15 +7,15 @@ from datetime import datetime
 
 class MLFilter:
     def __init__(self):
-        # Optimized XGBoost parameters for deeper pattern recognition from 2y data
+        # Balanced XGBoost parameters for higher trade volume and reliable win rates
         self.model = xgb.XGBClassifier(
-            n_estimators=300,
-            max_depth=8,
-            learning_rate=0.03,
-            subsample=0.85,
-            colsample_bytree=0.85,
-            min_child_weight=2,
-            gamma=0.1,
+            n_estimators=400,
+            max_depth=6,
+            learning_rate=0.02,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            min_child_weight=3,
+            gamma=0.2,
             random_state=42,
             eval_metric='logloss'
         )
@@ -91,11 +91,11 @@ class MLFilter:
             features = self.prepare_features(df_work, indices)
             if len(features) == 0: continue
 
-            # PROBABILITY THRESHOLDING: Only take trades with > 62% win confidence (tighter for XGB)
+            # PROBABILITY THRESHOLDING: Balanced at 55% for higher trade participation
             probs = self.model.predict_proba(features)
             for i, idx in enumerate(indices):
                 win_prob = probs[i][1]
-                if win_prob < 0.62:
+                if win_prob < 0.55:
                     df_work.at[idx, side] = False
 
         df_work.index = df.index

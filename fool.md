@@ -54,8 +54,8 @@ Imagine taking an exam. If you've already seen the answers, your high score is a
 The AI doesn't just see "Price." It sees specific details called **Features**:
 
 *   **RSI (The Speedometer)**: Is the price moving too fast?
-*   **EMA Alignment (The Trend Stack)**: Are the short-term and long-term trends lined up? (Like gears in a watch).
-*   **Price vs EMA (The Distance)**: Is the price too far away from the trend line?
+*   **The EMA Ribbon (The 3-Tier Filter)**: We use 4 different Trend Lines (EMA 3, 8, 20, and 50). When all four are "stacked" in the same direction, it’s like a massive green light for a 15-minute trade.
+*   **Price vs EMA (The Distance)**: Is the price too far away from the trend line? If it's too far, it might "snap back" like a rubber band.
 *   **Bollinger Bands (The Rubber Band)**: Is the price stretched too far and about to snap back?
 *   **Candle Streaks**: Have there been many same-color candles in a row?
 *   **Market Sessions**: Is it the "London" morning or the "New York" evening?

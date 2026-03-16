@@ -25,12 +25,13 @@ class MLFilter:
         self.trained_at = None
         self.best_threshold = 0.65
 
-        # Final Feature Set following the requested architecture (v5)
+        # Final Feature Set following the requested architecture (v6)
         self.feature_cols = [
-            'rsi', 'macd_diff', 'adx', 'bb_pct', 'ema_dist',
-            'ema_slope', 'rsi_slope', 'rsi_zone', 'bb_width',
-            'bb_mid_dist', 'ema_alignment',
-            'price_vs_ema20', 'price_vs_ema50', 'ema20_vs_ema50',
+            'rsi', 'macd_diff', 'adx', 'bb_pct', 'bb_width', 'bb_mid_dist',
+            'ema_bullish_stack', 'ema_bearish_stack',
+            'price_vs_ema3', 'price_vs_ema8', 'price_vs_ema20', 'price_vs_ema50',
+            'ribbon_width', 'ema8_slope', 'recent_bull_cross', 'recent_bear_cross',
+            'momentum_agrees',
             'candle_body_pct', 'candle_streak', 'atr_percentile',
             'hour', 'day_of_week', 'session',
             'rsi_lag_1', 'macd_lag_1', 'close_change_lag_1'

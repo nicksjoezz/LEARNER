@@ -22,22 +22,36 @@ def add_indicators(df):
     adx = ta.trend.ADXIndicator(df['high'], df['low'], df['close'])
     df['adx'] = adx.adx()
 
+    # 3-Tier EMA Structure for 5m/15m Expiry
+    df['ema_3'] = ta.trend.ema_indicator(df['close'], window=3)
+    df['ema_8'] = ta.trend.ema_indicator(df['close'], window=8)
     df['ema_20'] = ta.trend.ema_indicator(df['close'], window=20)
     df['ema_50'] = ta.trend.ema_indicator(df['close'], window=50)
-    df['ema_200'] = ta.trend.ema_indicator(df['close'], window=200)
-    df['ema_dist'] = (df['close'] - df['ema_200']) / df['close']
-    # EMA Slope (normalized)
-    df['ema_slope'] = df['ema_200'].diff(3) / df['close']
 
-    # Relative EMA Features (v4 enhancements)
-    df['price_vs_ema20'] = (df['close'] - df['ema_20']) / (df['ema_20'] + 1e-9)
-    df['price_vs_ema50'] = (df['close'] - df['ema_50']) / (df['ema_50'] + 1e-9)
-    df['ema20_vs_ema50'] = (df['ema_20'] - df['ema_50']) / (df['ema_50'] + 1e-9)
+    # 1. EMA Alignment (Stacking)
+    df['ema_bullish_stack'] = ((df['ema_3'] > df['ema_8']) & (df['ema_8'] > df['ema_20']) & (df['ema_20'] > df['ema_50'])).astype(int)
+    df['ema_bearish_stack'] = ((df['ema_3'] < df['ema_8']) & (df['ema_8'] < df['ema_20']) & (df['ema_20'] < df['ema_50'])).astype(int)
 
-    # EMA Alignment: 1 = Bullish Stack, -1 = Bearish Stack, 0 = Mixed
-    df['ema_alignment'] = 0
-    df.loc[(df['ema_20'] > df['ema_50']) & (df['ema_50'] > df['ema_200']), 'ema_alignment'] = 1
-    df.loc[(df['ema_20'] < df['ema_50']) & (df['ema_50'] < df['ema_200']), 'ema_alignment'] = -1
+    # 2. Price Position relative to EMAs
+    df['price_vs_ema3'] = (df['close'] - df['ema_3']) / (df['close'] + 1e-9)
+    df['price_vs_ema8'] = (df['close'] - df['ema_8']) / (df['close'] + 1e-9)
+    df['price_vs_ema20'] = (df['close'] - df['ema_20']) / (df['close'] + 1e-9)
+    df['price_vs_ema50'] = (df['close'] - df['ema_50']) / (df['close'] + 1e-9)
+
+    # 3. Ribbon Width & EMA Slope
+    df['ribbon_width'] = (df['ema_3'] - df['ema_50']) / (df['close'] + 1e-9)
+    df['ema8_slope'] = df['ema_8'].diff(4) / (df['close'] + 1e-9) # 4 candles ago = 20min
+
+    # 4. Recent EMA Cross Detection (Lookback 3 candles)
+    ema3_prev = df['ema_3'].shift(3)
+    ema8_prev = df['ema_8'].shift(3)
+    df['recent_bull_cross'] = ((ema3_prev < ema8_prev) & (df['ema_3'] > df['ema_8'])).astype(int)
+    df['recent_bear_cross'] = ((ema3_prev > ema8_prev) & (df['ema_3'] < df['ema_8'])).astype(int)
+
+    # 5. Momentum Agreement (Price Change vs EMA3 Change over 3 candles)
+    price_change = df['close'] - df['close'].shift(3)
+    ema3_change = df['ema_3'] - df['ema_3'].shift(3)
+    df['momentum_agrees'] = ((price_change > 0) == (ema3_change > 0)).astype(int)
 
     # --- ADVANCED ENGINEERED FEATURES ---
 

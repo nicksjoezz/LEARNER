@@ -94,6 +94,12 @@ class ModelManager:
 
                 self.log(f"Training: {symbol} Strat {strat_idx}...")
                 df_ut = ut_bot(df, a=a, c=c)
+
+                # FULL ML ARCHITECTURE:
+                # We treat every trend crossover as a potential trade and let the ML filter learn.
+                df_ut['buy'] = df_ut['ut_above'] == 1
+                df_ut['sell'] = df_ut['ut_below'] == 1
+
                 raw_trades = Backtester(df_ut).run()
                 del df_ut
 

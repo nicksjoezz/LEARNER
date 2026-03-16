@@ -4,22 +4,25 @@ import xgboost as xgb
 import joblib
 import os
 from datetime import datetime
+from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
 class MLFilter:
     def __init__(self):
         # XGBoost parameters optimized for 5m Rise/Fall (v4 configuration)
         self.model = xgb.XGBClassifier(
             objective='binary:logistic',
-            n_estimators=200,      # User suggested 200
-            max_depth=4,
-            learning_rate=0.05,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            min_child_weight=10,   # User suggested 10 to prevent overfitting
-            gamma=0.2,
+            n_estimators=150,      # Reduced to further prevent overfitting on small signal sets
+            max_depth=3,           # Shallower depth for better generalization
+            learning_rate=0.03,    # Slower learning rate
+            subsample=0.7,         # More aggressive subsampling
+            colsample_bytree=0.7,
+            min_child_weight=15,   # Increased floor to ensure leaf stability
+            gamma=0.5,             # Higher regularization
             random_state=42,
-            eval_metric='aucpr',   # User suggested precision-recall optimization
-            scale_pos_weight=1.0
+            eval_metric='aucpr',
+            scale_pos_weight=1.0,
+            reg_alpha=0.1,         # L1 regularization
+            reg_lambda=1.0         # L2 regularization
         )
         self.is_trained = False
         self.trained_at = None
@@ -52,6 +55,8 @@ class MLFilter:
             # Candle Pattern features
             'body_ratio', 'wick_ratio', 'is_bullish', 'candle_streak',
             'bull_engulf', 'bear_engulf', 'is_doji', 'gap',
+            # UT Bot Internal features
+            'ut_stop_dist', 'ut_above', 'ut_below',
             # Time & Meta features
             'hour', 'day_of_week', 'session',
             'rsi7_lag_1', 'macd_lag_1', 'close_change_lag_1'
@@ -125,18 +130,27 @@ class MLFilter:
             # If the model can't even fit the training data better than a coin flip, reject it.
             return False
 
-        # --- Threshold Tuning Phase ---
-        probs = self.model.predict_proba(X)[:, 1]
+        # --- Threshold Tuning Phase (using Out-of-Fold predictions) ---
+        # This prevents the model from choosing a threshold based on "memorized" training data.
+        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        try:
+            # Get honest probabilities for training data
+            oof_probs = cross_val_predict(self.model, X, y, cv=skf, method='predict_proba')[:, 1]
+        except:
+            # Fallback to simple predictions if CV fails
+            oof_probs = self.model.predict_proba(X)[:, 1]
+
         best_utility = -1
-        best_t = 0.62 # Target Floor
+        best_t = 0.58
 
         total_signals = len(y)
-        # We need enough volume to be profitable, but enough winrate to survive.
-        participation_floor = total_signals * 0.40 # Target at least 40% retention
+        # Target at least 45% retention to maintain activity
+        participation_floor = total_signals * 0.45
 
         found_above_floor = False
-        for t in np.linspace(0.55, 0.75, 41):
-            mask = probs >= t
+        # Test thresholds from 52% to 75%
+        for t in np.linspace(0.52, 0.75, 47):
+            mask = oof_probs >= t
             subset_y = y[mask]
             num_trades = len(subset_y)
 
@@ -144,16 +158,26 @@ class MLFilter:
 
             found_above_floor = True
             win_rate = np.mean(subset_y)
-            # Utility favors higher accuracy above 50%
-            utility = (win_rate - 0.5) * np.log1p(num_trades)
+            # Utility Score: Accuracy weight increased, but balanced by volume
+            # We want at least 53% winrate to cover spread/commissions ideally
+            utility = (win_rate - 0.51) * np.sqrt(num_trades)
 
             if utility > best_utility:
                 best_utility = utility
                 best_t = t
 
         if not found_above_floor:
-            # If no threshold hits the volume floor, use the one that gives most volume at >55% accuracy
-            best_t = 0.55
+            # PARTICIPATION FALLBACK:
+            # If no threshold meets the 45% volume floor while maintaining target accuracy,
+            # find the threshold that gets closest to the 45% floor regardless of accuracy.
+            best_dist = 999
+            for t in np.linspace(0.50, 0.60, 21):
+                mask = oof_probs >= t
+                num_trades = np.sum(mask)
+                dist = abs(num_trades - participation_floor)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_t = t
 
         self.best_threshold = best_t
         self.is_trained = True

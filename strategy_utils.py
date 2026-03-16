@@ -69,6 +69,11 @@ def ut_bot(df, a=1, c=10):
     df['buy'] = (df['close'] > df['xATRTrailingStop']) & df['above']
     df['sell'] = (df['close'] < df['xATRTrailingStop']) & df['below']
 
+    # Advanced ML Features from UT Bot
+    df['ut_stop_dist'] = (df['close'] - df['xATRTrailingStop']) / (df['close'] + 1e-9)
+    df['ut_above'] = df['above'].astype(int)
+    df['ut_below'] = df['below'].astype(int)
+
     # Cleanup temporary columns
     df.drop(columns=['prev_xATR', 'prev_ema1'], inplace=True)
 

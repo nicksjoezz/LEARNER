@@ -28,6 +28,11 @@ class StrategyHandler:
             # Run UT Bot strategy
             df = ut_bot(df, a=a, c=c)
 
+            # FULL ML ARCHITECTURE:
+            # We treat every trend crossover as a potential trade and let the ML filter decide.
+            df['buy'] = df['ut_above'] == 1
+            df['sell'] = df['ut_below'] == 1
+
             # Check signal on the last closed candle (index -2)
             raw_sig = df.iloc[-2]
             buy_triggered = raw_sig['buy']
@@ -38,8 +43,8 @@ class StrategyHandler:
                 side = 'BUY' if buy_triggered else 'SELL'
                 self.bot.log(f"SIGNAL STATUS: [{closed_candle_time}] {side} Signal detected. Verifying with Neural Filter...")
 
-                # ML Filter (XGBoost)
-                # This model has been trained on thousands of past signals to distinguish winners from losers.
+                # ML-ONLY ARCHITECTURE:
+                # We NO LONGER execute raw signals. Every signal MUST pass the XGBoost filter.
                 ml = model_manager.get_model(symbol, strategy_idx)
                 if ml:
                     df_ml = ml.filter_signals(df)
@@ -48,10 +53,9 @@ class StrategyHandler:
                         self.bot.log(f"NEURAL FILTER: [{closed_candle_time}] [PASSED] High-probability winner identified. Executing {side} trade.")
                         return 'CALL' if buy_triggered else 'PUT'
                     else:
-                        self.bot.log(f"NEURAL FILTER: [{closed_candle_time}] [BLOCKED] Signal resembles historical losses.")
+                        self.bot.log(f"NEURAL FILTER: [{closed_candle_time}] [BLOCKED] Signal filtered by AI.")
                 else:
-                    self.bot.log(f"NEURAL FILTER: [{closed_candle_time}] [INACTIVE] Executing raw signal.")
-                    return 'CALL' if buy_triggered else 'PUT'
+                    self.bot.log(f"NEURAL FILTER: [{closed_candle_time}] [REJECTED] Model not ready for {symbol}. Trading paused.")
             else:
                 self.bot.log(f"SIGNAL STATUS: [{closed_candle_time}] No signal found on closed candle.")
 

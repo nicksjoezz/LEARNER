@@ -98,13 +98,20 @@ def run_bt():
         s_idx = i + 1
 
         # Step 2: Generate signals on the FULL dataset
-        df_sig_all = ut_bot(df_all, a=a, c=c)
+        df_strat = ut_bot(df_all, a=a, c=c)
+
+        # FULL ML TRANSITION:
+        # Instead of just using 'buy' and 'sell' (which are strict),
+        # we let ML learn from EVERY Crossover ('above' and 'below').
+        # This gives the ML a much larger pool of candidates to pick from.
+        df_strat['buy'] = df_strat['ut_above'] == 1
+        df_strat['sell'] = df_strat['ut_below'] == 1
 
         # Step 3: Split signals into TRAIN and TEST portions
         # Training set: everything BEFORE ts_cutoff
-        df_train = df_sig_all[df_sig_all['epoch'] < ts_cutoff].copy()
+        df_train = df_strat[df_strat['epoch'] < ts_cutoff].copy()
         # Test set: everything AFTER ts_cutoff (the fresh lookback days)
-        df_bt = df_sig_all[df_sig_all['epoch'] >= ts_cutoff].copy()
+        df_bt = df_strat[df_strat['epoch'] >= ts_cutoff].copy()
 
         # --- Fair ML Training Phase ---
         # ML trains ONLY on historical signals

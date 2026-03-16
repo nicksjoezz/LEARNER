@@ -147,24 +147,33 @@ def add_indicators(df):
     df['is_bullish'] = (df['close'] > df['open']).astype(int)
 
     # Streak Calculation
-    is_up = (df['close'] > df['open']).astype(int)
-    is_down = (df['close'] < df['open']).astype(int)
-    df['candle_streak'] = is_up.groupby((is_up != is_up.shift()).cumsum()).cumsum() - \
-                          is_down.groupby((is_down != is_down.shift()).cumsum()).cumsum()
+    is_up = (df['close'] > df['open']).astype(np.int8)
+    is_down = (df['close'] < df['open']).astype(np.int8)
+    df['candle_streak'] = (is_up.groupby((is_up != is_up.shift()).cumsum()).cumsum() - \
+                          is_down.groupby((is_down != is_down.shift()).cumsum()).cumsum()).astype(np.int8)
 
     df['bull_engulf'] = ((df['close'] > df['open'].shift(1)) & (df['open'] < df['close'].shift(1)) & (df['close'].shift(1) < df['open'].shift(1))).astype(int)
     df['bear_engulf'] = ((df['close'] < df['open'].shift(1)) & (df['open'] > df['close'].shift(1)) & (df['close'].shift(1) > df['open'].shift(1))).astype(int)
     df['is_doji'] = (df['body_ratio'] < 0.1).astype(int)
     df['gap'] = (df['open'] - df['close'].shift(1)) / (df['close'].shift(1) + 1e-9)
 
-    # 9. Time Features
-    dt = pd.to_datetime(df['epoch'], unit='s', utc=True)
-    df['hour'] = dt.dt.hour
-    df['day_of_week'] = dt.dt.dayofweek
+    # 9. Time Features (Integer-based extraction for memory efficiency)
+    epochs = df['epoch'].values
+    # (epoch // 3600) % 24 = hour
+    df['hour'] = ((epochs // 3600) % 24).astype(np.int8)
+    # (epoch // 86400 + 4) % 7 = day (epoch 0 was Thursday)
+    df['day_of_week'] = ((epochs // 86400 + 4) % 7).astype(np.int8)
+
     df['session'] = 0
     df.loc[(df['hour'] >= 0) & (df['hour'] < 8), 'session'] = 1 # Asian
     df.loc[(df['hour'] >= 7) & (df['hour'] < 16), 'session'] = 2 # London
     df.loc[(df['hour'] >= 12) & (df['hour'] < 21), 'session'] = 3 # New York
+    df['session'] = df['session'].astype(np.int8)
+
+    # Convert numeric columns to float32 to save 50% memory
+    # Keep epoch as int64
+    cols_to_convert = df.select_dtypes(include=['float64']).columns
+    df[cols_to_convert] = df[cols_to_convert].astype(np.float32)
 
     # Lagged Memory
     df['rsi7_lag_1'] = df['rsi7'].shift(1)

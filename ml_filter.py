@@ -60,10 +60,11 @@ class MLFilter:
     def prepare_features(self, df, positional_indices):
         valid_indices = [idx for idx in positional_indices if 0 <= idx < len(df)]
         if not valid_indices:
-            return np.zeros((0, len(self.feature_cols)))
+            return np.zeros((0, len(self.feature_cols)), dtype=np.float32)
 
-        feature_data = df.iloc[valid_indices][self.feature_cols]
-        feature_data = feature_data.fillna(0)
+        # Efficiently extract features with minimal copying
+        feature_data = df.iloc[valid_indices][self.feature_cols].copy()
+        feature_data = feature_data.fillna(0).astype(np.float32)
         return feature_data.values
 
     def train(self, df, trades):
@@ -116,6 +117,10 @@ class MLFilter:
         # Evaluate training accuracy as a baseline sanity check
         train_preds = self.model.predict(X)
         train_acc = np.mean(train_preds == y)
+
+        # Explicitly clean up training predictions
+        del train_preds
+
         if train_acc < 0.52:
             # If the model can't even fit the training data better than a coin flip, reject it.
             return False

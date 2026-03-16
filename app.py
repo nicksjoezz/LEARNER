@@ -146,8 +146,10 @@ def run_bt():
             }
         }
 
-    # Use ThreadPoolExecutor for parallel backtesting (CPU bound tasks in XGBoost use native threads)
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    # Use ThreadPoolExecutor for parallel backtesting
+    # Sequential execution (max_workers=1) is safest for OOM prevention in low-memory environments
+    # given the size of the 100k candle dataset.
+    with ThreadPoolExecutor(max_workers=1) as executor:
         res = list(executor.map(run_single_strat, enumerate(params)))
 
     return jsonify({'results': res})

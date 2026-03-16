@@ -84,6 +84,9 @@ class ModelManager:
             del df_raw
             gc.collect()
 
+            # Ensure data types are consistent before strategy loops
+            df['epoch'] = df['epoch'].astype(np.int64)
+
             for i, (a, c) in enumerate(self.strat_params):
                 strat_idx = i + 1
                 if only_pending and self.get_model_status(symbol, strat_idx) == 'ready':
@@ -108,6 +111,7 @@ class ModelManager:
                 gc.collect()
                 time.sleep(0.5) # Yield time to OS
 
+            # Final cleanup for the symbol
             del df
             gc.collect()
             self.log(f"Finished training all strategies for {symbol}.")
@@ -154,15 +158,17 @@ class ModelManager:
         if self.socketio:
             self.socketio.emit('training_progress', {'message': f"Syncing {symbol} market data..."})
 
-        from handlers.data_handler import DataHandler
-        data_handler = DataHandler(data_dir=self.data_dir)
+        # --- Memory Management Optimization ---
+        # Ensure only ONE major operation (sync OR train) happens at a time across the system
+        # to prevent OOM errors in memory-constrained environments.
+        async with self.training_lock:
+            from handlers.data_handler import DataHandler
+            data_handler = DataHandler(data_dir=self.data_dir)
 
-        try:
-            # Sync data without holding the global training lock
-            await data_handler.update_symbol_data(symbol)
+            try:
+                # Sync data
+                await data_handler.update_symbol_data(symbol)
 
-            # Only the actual ML training phase is locked globally
-            async with self.training_lock:
                 if self.socketio:
                     self.socketio.emit('training_progress', {'message': f"Training ML models for {symbol}..."})
 
@@ -174,12 +180,14 @@ class ModelManager:
                 if self.socketio:
                     self.socketio.emit('training_progress', {'message': f"{symbol} models ready."})
 
+                # Force cleanup after each symbol to ensure memory is available for next
+                gc.collect()
                 return True
-        except Exception as e:
-            self.log(f"Failed to prepare {symbol}: {e}")
-            if self.socketio:
-                self.socketio.emit('training_progress', {'symbol': symbol, 'status': 'failed'})
-            return False
+            except Exception as e:
+                self.log(f"Failed to prepare {symbol}: {e}")
+                if self.socketio:
+                    self.socketio.emit('training_progress', {'symbol': symbol, 'status': 'failed'})
+                return False
 
     async def train_all_models(self):
         """Daily maintenance cycle."""

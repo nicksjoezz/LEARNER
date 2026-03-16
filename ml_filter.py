@@ -24,10 +24,11 @@ class MLFilter:
         self.trained_at = None
         self.best_threshold = 0.65 # Balanced target for Rise/Fall
 
-        # New Feature Set following the requested architecture
+        # New Feature Set following the requested architecture (v4)
         self.feature_cols = [
             'rsi', 'macd_diff', 'adx', 'bb_pct', 'ema_dist',
             'ema_slope', 'rsi_slope', 'rsi_zone', 'bb_width',
+            'bb_mid_dist', 'ema_alignment',
             'candle_body_pct', 'candle_streak', 'atr_percentile',
             'hour', 'day_of_week', 'session',
             'rsi_lag_1', 'macd_lag_1', 'close_change_lag_1'
@@ -87,6 +88,14 @@ class MLFilter:
 
         # Train model
         self.model.fit(X, y)
+
+        # --- Accuracy Safety Gate ---
+        # Evaluate training accuracy as a baseline sanity check
+        train_preds = self.model.predict(X)
+        train_acc = np.mean(train_preds == y)
+        if train_acc < 0.52:
+            # If the model can't even fit the training data better than a coin flip, reject it.
+            return False
 
         # --- Threshold Tuning Phase ---
         probs = self.model.predict_proba(X)[:, 1]

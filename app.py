@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 import json, os, asyncio, threading, pandas as pd
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from trading_bot import TradingBot
 from model_manager import model_manager
@@ -92,13 +93,12 @@ def run_bt():
     df_train = df_all[df_all['epoch'] < ts_cutoff].copy()
     df_bt = df_all[df_all['epoch'] >= ts_cutoff].copy()
 
-    res = []
-    params = [(1, 10), (2, 20), (3, 30), (1, 20), (2, 10), (3, 20), (1, 30), (2, 30), (3, 10), (1.5, 15)]
-
     balance = float(d.get('balance', 1000))
     risk_pc = float(d.get('risk_pc', load_config().get('trade_pc', 1)))
+    params = [(1, 10), (2, 20), (3, 30), (1, 20), (2, 10), (3, 20), (1, 30), (2, 30), (3, 10), (1.5, 15)]
 
-    for i, (a, c) in enumerate(params):
+    def run_single_strat(args):
+        i, (a, c) = args
         s_idx = i + 1
 
         # --- Fair ML Training Phase ---
@@ -126,7 +126,7 @@ def run_bt():
             ml_bal, ml_prof, ml_mcl = 0.0, 0.0, 0
             m_status = 'insufficient_data'
 
-        res.append({
+        return {
             'name': f"Strategy {s_idx}",
             'params': f"a={a}, c={c}",
             'raw': {
@@ -142,7 +142,12 @@ def run_bt():
                 'final_balance': float(ml_bal),
                 'max_consec_losses': int(ml_mcl)
             }
-        })
+        }
+
+    # Use ThreadPoolExecutor for parallel backtesting (CPU bound tasks in XGBoost use native threads)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        res = list(executor.map(run_single_strat, enumerate(params)))
+
     return jsonify({'results': res})
 
 def start_bot_loop(loop):

@@ -12,18 +12,27 @@ def add_indicators(df):
     df['macd_diff'] = macd.macd_diff()
 
     bb = ta.volatility.BollingerBands(df['close'])
+    df['bb_mavg'] = bb.bollinger_mavg()
     df['bb_hband'] = bb.bollinger_hband()
     df['bb_lband'] = bb.bollinger_lband()
     df['bb_pct'] = (df['close'] - df['bb_lband']) / (df['bb_hband'] - df['bb_lband'] + 1e-9)
     df['bb_width'] = (df['bb_hband'] - df['bb_lband']) / df['close']
+    df['bb_mid_dist'] = (df['close'] - df['bb_mavg']) / (df['bb_mavg'] + 1e-9)
 
     adx = ta.trend.ADXIndicator(df['high'], df['low'], df['close'])
     df['adx'] = adx.adx()
 
+    df['ema_20'] = ta.trend.ema_indicator(df['close'], window=20)
+    df['ema_50'] = ta.trend.ema_indicator(df['close'], window=50)
     df['ema_200'] = ta.trend.ema_indicator(df['close'], window=200)
     df['ema_dist'] = (df['close'] - df['ema_200']) / df['close']
     # EMA Slope (normalized)
     df['ema_slope'] = df['ema_200'].diff(3) / df['close']
+
+    # EMA Alignment: 1 = Bullish Stack, -1 = Bearish Stack, 0 = Mixed
+    df['ema_alignment'] = 0
+    df.loc[(df['ema_20'] > df['ema_50']) & (df['ema_50'] > df['ema_200']), 'ema_alignment'] = 1
+    df.loc[(df['ema_20'] < df['ema_50']) & (df['ema_50'] < df['ema_200']), 'ema_alignment'] = -1
 
     # --- ADVANCED ENGINEERED FEATURES ---
 

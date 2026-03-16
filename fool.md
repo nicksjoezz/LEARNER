@@ -42,6 +42,11 @@ When the Scout finds a trade today, the bot sends all the current data to the AI
 *   **AI Brain**: "I've seen this 500 times in the last year. 80% of the time, this pattern led to a loss. **BLOCK THIS TRADE.**"
 *   Or: "This pattern is a high-probability winner. **EXECUTE TRADE.**"
 
+### 5. "Fair" Training (No Cheating!)
+We use a method called **Walk-Forward Validation**.
+Imagine taking an exam. If you've already seen the answers, your high score is a lie. Many trading bots "cheat" by training on the same data they use for backtesting.
+**Our bot is different:** When you run a backtest, the AI is trained *only* on data that happened *before* the test started. This gives you a honest, "real-world" result of how the bot would have actually performed.
+
 ---
 
 ## 📊 Part 3: The "Features" (What the Brain Sees)
@@ -49,10 +54,11 @@ When the Scout finds a trade today, the bot sends all the current data to the AI
 The AI doesn't just see "Price." It sees specific details called **Features**:
 
 *   **RSI (The Speedometer)**: Is the price moving too fast?
+*   **EMA Alignment (The Trend Stack)**: Are the short-term and long-term trends lined up? (Like gears in a watch).
 *   **Bollinger Bands (The Rubber Band)**: Is the price stretched too far and about to snap back?
-*   **Candle Streaks**: Have there been 5 "Green" candles in a row?
-*   **Market Sessions**: Is it the "London" morning or the "New York" evening? (Markets behave differently at different times).
-*   **ATR (The Jitter Meter)**: Is the market calm or is it "jumping" around?
+*   **Candle Streaks**: Have there been many same-color candles in a row?
+*   **Market Sessions**: Is it the "London" morning or the "New York" evening?
+*   **ATR Percentile**: Is the market more "jittery" than usual for this specific symbol?
 
 ---
 
@@ -73,6 +79,7 @@ The AI doesn't just see "Price." It sees specific details called **Features**:
 *   **Compounding**: The bot uses a percentage of your balance (e.g., 1%). As your balance grows, the trade size grows automatically.
 *   **Volatility**: These markets (R_100, R_50, etc.) are synthetic. They don't stop for weekends or news.
 *   **Neural Filter**: If you see "Signal detected... Blocked by Neural Filter" in the logs, **this is a good thing!** It means the AI just saved you from a likely loss.
+*   **Accuracy Gate**: Every night, the bot checks if its new "Brain" is smart enough. If the AI can't predict patterns better than a coin flip, it will refuse to update, keeping your old (trusted) brain instead.
 
 ---
 

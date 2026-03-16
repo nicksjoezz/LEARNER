@@ -25,16 +25,36 @@ class MLFilter:
         self.trained_at = None
         self.best_threshold = 0.65
 
-        # Final Feature Set following the requested architecture (v6)
+        # Advanced Feature Set following the requested architecture (v7)
         self.feature_cols = [
-            'rsi', 'macd_diff', 'adx', 'bb_pct', 'bb_width', 'bb_mid_dist',
-            'ema_bullish_stack', 'ema_bearish_stack',
-            'price_vs_ema3', 'price_vs_ema8', 'price_vs_ema20', 'price_vs_ema50',
-            'ribbon_width', 'ema8_slope', 'recent_bull_cross', 'recent_bear_cross',
+            # RSI features
+            'rsi7', 'rsi14', 'rsi7_slope', 'rsi7_strength', 'rsi_agreement',
+            'bull_divergence', 'bear_divergence', 'rsi7_overbought', 'rsi7_oversold',
+            # MACD features
+            'macd_hist', 'macd_hist_rising', 'macd_hist_strength', 'macd_above_zero',
+            'macd_cross_up', 'macd_cross_down', 'hist_acceleration',
+            # Bollinger Bands features
+            'bb20_position', 'bb10_position', 'bb20_width', 'volatility_expanding',
+            'bb_squeeze', 'above_bb20_mid', 'bb_outside_upper', 'bb_outside_lower',
+            # ATR features
+            'atr14', 'atr_percentile', 'atr_ratio', 'candle_vs_atr', 'atr_expanding',
+            'vol_dead', 'vol_extreme', 'vol_normal',
+            # Stochastic features
+            'stoch_k_fast', 'stoch_fast_bull', 'stoch_fast_bear', 'stoch_overbought',
+            'stoch_oversold', 'stoch_agreement', 'stoch_slope',
+            # CCI features
+            'cci14', 'cci7', 'cci_cross_up', 'cci_cross_down', 'cci_break_up',
+            'cci_break_down', 'cci_agreement', 'cci_extreme_up', 'cci_extreme_dn',
+            # EMA Ribbon features
+            'ema_bullish_stack', 'ema_bearish_stack', 'price_vs_ema3', 'price_vs_ema8',
+            'price_vs_ema20', 'price_vs_ema50', 'ribbon_width', 'ema8_slope',
             'momentum_agrees',
-            'candle_body_pct', 'candle_streak', 'atr_percentile',
+            # Candle Pattern features
+            'body_ratio', 'wick_ratio', 'is_bullish', 'candle_streak',
+            'bull_engulf', 'bear_engulf', 'is_doji', 'gap',
+            # Time & Meta features
             'hour', 'day_of_week', 'session',
-            'rsi_lag_1', 'macd_lag_1', 'close_change_lag_1'
+            'rsi7_lag_1', 'macd_lag_1', 'close_change_lag_1'
         ]
 
     def prepare_features(self, df, positional_indices):

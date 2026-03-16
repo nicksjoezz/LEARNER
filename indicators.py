@@ -29,6 +29,11 @@ def add_indicators(df):
     # EMA Slope (normalized)
     df['ema_slope'] = df['ema_200'].diff(3) / df['close']
 
+    # Relative EMA Features (v4 enhancements)
+    df['price_vs_ema20'] = (df['close'] - df['ema_20']) / (df['ema_20'] + 1e-9)
+    df['price_vs_ema50'] = (df['close'] - df['ema_50']) / (df['ema_50'] + 1e-9)
+    df['ema20_vs_ema50'] = (df['ema_20'] - df['ema_50']) / (df['ema_50'] + 1e-9)
+
     # EMA Alignment: 1 = Bullish Stack, -1 = Bearish Stack, 0 = Mixed
     df['ema_alignment'] = 0
     df.loc[(df['ema_20'] > df['ema_50']) & (df['ema_50'] > df['ema_200']), 'ema_alignment'] = 1

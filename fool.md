@@ -25,7 +25,7 @@ First, we have a basic strategy called **UT Bot**. It’s like a scout that look
 
 ### 2. The Training (The "School")
 To fix this, the bot goes to "School" every night (Daily Retraining).
-*   It looks at **100,000+ past candles**.
+*   It looks at **100,000+ past candles** (roughly 2 years of history). This is critical because it gives the AI thousands of signals to learn from, making it much smarter than a bot that only looks at a few days.
 *   It finds every time the Scout (UT Bot) gave a signal.
 *   It records **everything** about that moment: Was the RSI high? Was it a Monday? Was the market "jittery"?
 *   It then looks at the result: **Did that trade win or lose?**
@@ -55,6 +55,7 @@ The AI doesn't just see "Price." It sees specific details called **Features**:
 
 *   **RSI (The Speedometer)**: Is the price moving too fast?
 *   **EMA Alignment (The Trend Stack)**: Are the short-term and long-term trends lined up? (Like gears in a watch).
+*   **Price vs EMA (The Distance)**: Is the price too far away from the trend line?
 *   **Bollinger Bands (The Rubber Band)**: Is the price stretched too far and about to snap back?
 *   **Candle Streaks**: Have there been many same-color candles in a row?
 *   **Market Sessions**: Is it the "London" morning or the "New York" evening?

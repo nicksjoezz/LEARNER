@@ -86,12 +86,8 @@ def run_bt():
     if len(df_train_raw) < 1000:
         return jsonify({'error': 'Insufficient history for fair ML training (Need > 1000 candles before backtest start)', 'results': []})
 
-    # Calculate indicators on the FULL dataset first to avoid "cold start" NaNs in the backtest period
+    # Step 1: Add indicators to FULL dataset to ensure continuity
     df_all = add_indicators(df_full)
-
-    # Slice the enriched data
-    df_train = df_all[df_all['epoch'] < ts_cutoff].copy()
-    df_bt = df_all[df_all['epoch'] >= ts_cutoff].copy()
 
     balance = float(d.get('balance', 1000))
     risk_pc = float(d.get('risk_pc', load_config().get('trade_pc', 1)))
@@ -101,23 +97,29 @@ def run_bt():
         i, (a, c) = args
         s_idx = i + 1
 
-        # --- Fair ML Training Phase ---
-        # Generate signals on training data ONLY
-        df_sig_train = ut_bot(df_train, a=a, c=c)
-        tr_train = Backtester(df_sig_train).run()
+        # Step 2: Generate signals on the FULL dataset
+        df_sig_all = ut_bot(df_all, a=a, c=c)
 
+        # Step 3: Split signals into TRAIN and TEST portions
+        # Training set: everything BEFORE ts_cutoff
+        df_train = df_sig_all[df_sig_all['epoch'] < ts_cutoff].copy()
+        # Test set: everything AFTER ts_cutoff (the fresh lookback days)
+        df_bt = df_sig_all[df_sig_all['epoch'] >= ts_cutoff].copy()
+
+        # --- Fair ML Training Phase ---
+        # ML trains ONLY on historical signals
+        tr_train = Backtester(df_train).run()
         fair_ml = MLFilter()
         is_ready = fair_ml.train(df_train, tr_train)
 
         # --- Backtest Phase ---
-        # Raw results on BT period
-        df_sig_bt = ut_bot(df_bt, a=a, c=c)
-        tr_raw = Backtester(df_sig_bt).run()
+        # Raw performance on the fresh test period
+        tr_raw = Backtester(df_bt).run()
         raw_bal, raw_prof, raw_mcl = simulate_financials(tr_raw, balance, risk_pc)
 
-        # ML Filtered results on BT period using the 'Fair' model
+        # ML Filtered performance on the fresh test period
         if is_ready:
-            df_filtered = fair_ml.filter_signals(df_sig_bt)
+            df_filtered = fair_ml.filter_signals(df_bt)
             tr_ml = Backtester(df_filtered).run()
             ml_bal, ml_prof, ml_mcl = simulate_financials(tr_ml, balance, risk_pc)
             m_status = 'ready'

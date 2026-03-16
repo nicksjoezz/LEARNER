@@ -7,28 +7,30 @@ from datetime import datetime
 
 class MLFilter:
     def __init__(self):
-        # XGBoost parameters optimized for 5m Rise/Fall (v3 configuration)
+        # XGBoost parameters optimized for 5m Rise/Fall (v4 configuration)
         self.model = xgb.XGBClassifier(
-            n_estimators=300,
-            max_depth=4,         # Shallower depth to prevent overfitting as requested
+            objective='binary:logistic',
+            n_estimators=200,      # User suggested 200
+            max_depth=4,
             learning_rate=0.05,
             subsample=0.8,
             colsample_bytree=0.8,
-            min_child_weight=5,
+            min_child_weight=10,   # User suggested 10 to prevent overfitting
             gamma=0.2,
             random_state=42,
-            eval_metric='logloss',
-            scale_pos_weight=1.0  # Dynamic adjustment during training
+            eval_metric='aucpr',   # User suggested precision-recall optimization
+            scale_pos_weight=1.0
         )
         self.is_trained = False
         self.trained_at = None
-        self.best_threshold = 0.65 # Balanced target for Rise/Fall
+        self.best_threshold = 0.65
 
-        # New Feature Set following the requested architecture (v4)
+        # Final Feature Set following the requested architecture (v5)
         self.feature_cols = [
             'rsi', 'macd_diff', 'adx', 'bb_pct', 'ema_dist',
             'ema_slope', 'rsi_slope', 'rsi_zone', 'bb_width',
             'bb_mid_dist', 'ema_alignment',
+            'price_vs_ema20', 'price_vs_ema50', 'ema20_vs_ema50',
             'candle_body_pct', 'candle_streak', 'atr_percentile',
             'hour', 'day_of_week', 'session',
             'rsi_lag_1', 'macd_lag_1', 'close_change_lag_1'

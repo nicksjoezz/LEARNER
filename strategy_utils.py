@@ -48,12 +48,9 @@ def ut_bot(df, a=1, c=10):
 
     df['pos'] = pos
 
-    # ema 1 of src
-    df['ema1'] = ta.trend.ema_indicator(df['close'], window=1)
-
-    # crossover
-    df['above'] = (df['ema1'] > df['xATRTrailingStop']) & (df['ema1'].shift(1) <= df['xATRTrailingStop'].shift(1))
-    df['below'] = (df['ema1'] < df['xATRTrailingStop']) & (df['ema1'].shift(1) >= df['xATRTrailingStop'].shift(1))
+    # crossover (ema 1 of close is just close)
+    df['above'] = (df['close'] > df['xATRTrailingStop']) & (df['close'].shift(1) <= df['xATRTrailingStop'].shift(1))
+    df['below'] = (df['close'] < df['xATRTrailingStop']) & (df['close'].shift(1) >= df['xATRTrailingStop'].shift(1))
 
     df['buy'] = (df['close'] > df['xATRTrailingStop']) & df['above']
     df['sell'] = (df['close'] < df['xATRTrailingStop']) & df['below']
@@ -66,53 +63,56 @@ class Backtester:
         self.exit_candles = exit_candles
 
     def run(self):
-        trades = []
         df = self.df.reset_index(drop=True)
+        n = len(df)
+        limit = n - self.exit_candles - 1
 
-        for i in range(len(df) - self.exit_candles - 1):
-            if df['buy'].iloc[i]:
-                # Entry at next candle open
-                entry_idx = i + 1
-                exit_idx = i + self.exit_candles
+        # Identify signals
+        buy_mask = df['buy'].values[:limit]
+        sell_mask = df['sell'].values[:limit]
 
-                entry_price = df['open'].iloc[entry_idx]
-                exit_price = df['close'].iloc[exit_idx]
+        # To handle both buy and sell signals at the same index (if any, though strategy usually prevents it)
+        # and maintain priority/order, we can use a more robust vectorized approach
 
-                profit = exit_price - entry_price
-                win = profit > 0
+        # Original logic prioritized buy over sell at the same index:
+        # if buy: ... elif sell: ...
 
-                trades.append({
-                    'type': 'buy',
-                    'entry_time': df['epoch'].iloc[entry_idx],
-                    'entry_price': entry_price,
-                    'exit_time': df['epoch'].iloc[exit_idx],
-                    'exit_price': exit_price,
-                    'profit': profit,
-                    'win': win
-                })
+        combined_mask = buy_mask | sell_mask
+        signal_indices = np.where(combined_mask)[0]
 
-            elif df['sell'].iloc[i]:
-                # Entry at next candle open
-                entry_idx = i + 1
-                exit_idx = i + self.exit_candles
+        if len(signal_indices) == 0:
+            return pd.DataFrame()
 
-                entry_price = df['open'].iloc[entry_idx]
-                exit_price = df['close'].iloc[exit_idx]
+        # Determine type for each signal index
+        is_buy = df['buy'].values[signal_indices]
+        # For indices where both are true, buy wins (simulating the original elif)
+        types = np.where(is_buy, 'buy', 'sell')
 
-                profit = entry_price - exit_price
-                win = profit > 0
+        entry_indices = signal_indices + 1
+        exit_indices = signal_indices + self.exit_candles
 
-                trades.append({
-                    'type': 'sell',
-                    'entry_time': df['epoch'].iloc[entry_idx],
-                    'entry_price': entry_price,
-                    'exit_time': df['epoch'].iloc[exit_idx],
-                    'exit_price': exit_price,
-                    'profit': profit,
-                    'win': win
-                })
+        # Extract data in bulk
+        epochs = df['epoch'].values
+        opens = df['open'].values
+        closes = df['close'].values
 
-        return pd.DataFrame(trades)
+        res = pd.DataFrame({
+            'type': types,
+            'entry_time': epochs[entry_indices],
+            'entry_price': opens[entry_indices],
+            'exit_time': epochs[exit_indices],
+            'exit_price': closes[exit_indices]
+        })
+
+        # Calculate profit based on type
+        res['profit'] = np.where(
+            res['type'] == 'buy',
+            res['exit_price'] - res['entry_price'],
+            res['entry_price'] - res['exit_price']
+        )
+
+        res['win'] = res['profit'] > 0
+        return res
 
 def analyze_performance(trades_df, interval_days=60):
     if trades_df.empty:
@@ -148,15 +148,27 @@ def analyze_performance(trades_df, interval_days=60):
     return pd.DataFrame(results)
 
 def calculate_max_consecutive_losses(wins_series):
-    max_losses = 0
-    current_losses = 0
-    for win in wins_series:
-        if not win:
-            current_losses += 1
-            max_losses = max(max_losses, current_losses)
-        else:
-            current_losses = 0
-    return max_losses
+    if len(wins_series) == 0:
+        return 0
+
+    # Convert to boolean numpy array
+    wins = np.array(wins_series)
+
+    # We want to find streaks of False (losses)
+    # prepend/append True to identify starts and ends of loss streaks
+    is_loss = ~wins
+    is_loss_extended = np.concatenate([[False], is_loss, [False]])
+
+    # Find where streaks start and end
+    idx = np.where(np.diff(is_loss_extended.astype(int)))[0]
+
+    # Streaks are pairs of (start, end)
+    # streak_lengths = ends - starts
+    if len(idx) < 2:
+        return 0
+
+    streak_lengths = idx[1::2] - idx[::2]
+    return int(np.max(streak_lengths)) if len(streak_lengths) > 0 else 0
 
 def simulate_financials(trades_df, initial_balance=1000, risk_pc=1, win_payout=0.95):
     """

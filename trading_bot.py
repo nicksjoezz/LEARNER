@@ -240,9 +240,18 @@ class TradingBot:
                 self.log(f"OHLC Subscription active for {symbol}.")
                 self.ohlc_subscription.subscribe(self.handle_ohlc_update)
 
-                # Keep the task alive and monitor connection
+                # Keep the task alive and monitor connection with heartbeat
+                last_ping = time.time()
                 while self.is_running:
                     await asyncio.sleep(5)
+                    # Send heartbeat every 30 seconds
+                    if time.time() - last_ping > 30:
+                        try:
+                            await asyncio.wait_for(self.api.ping({'ping': 1}), timeout=5)
+                            last_ping = time.time()
+                        except Exception as e:
+                            self.log(f"Heartbeat failed: {e}. Reconnecting...")
+                            break
 
             except asyncio.CancelledError:
                 self.log("OHLC subscription cancelled.")
@@ -265,18 +274,26 @@ class TradingBot:
             ohlc = data['ohlc']
             candle_epoch = int(ohlc['open_time'])
 
-            # Real-time update of history_df
-            new_candle = {
-                'epoch': int(ohlc['open_time']),
-                'open': float(ohlc['open']),
-                'high': float(ohlc['high']),
-                'low': float(ohlc['low']),
-                'close': float(ohlc['close'])
-            }
-            new_row = pd.DataFrame([new_candle])
-            self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch')
-            if len(self.history_df) > 500:
-                self.history_df = self.history_df.iloc[-500:]
+            # Fast in-place update for building candle to prevent event loop lag
+            if not self.history_df.empty and candle_epoch == int(self.history_df.iloc[-1]['epoch']):
+                # Update existing row (building candle)
+                idx = self.history_df.index[-1]
+                self.history_df.loc[idx, 'high'] = max(self.history_df.loc[idx, 'high'], float(ohlc['high']))
+                self.history_df.loc[idx, 'low'] = min(self.history_df.loc[idx, 'low'], float(ohlc['low']))
+                self.history_df.loc[idx, 'close'] = float(ohlc['close'])
+            else:
+                # New candle or first candle
+                new_candle = {
+                    'epoch': candle_epoch,
+                    'open': float(ohlc['open']),
+                    'high': float(ohlc['high']),
+                    'low': float(ohlc['low']),
+                    'close': float(ohlc['close'])
+                }
+                new_row = pd.DataFrame([new_candle])
+                self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch')
+                if len(self.history_df) > 500:
+                    self.history_df = self.history_df.iloc[-500:]
 
             # Detect new candle (candle closed)
             if candle_epoch > self.last_candle_epoch:
@@ -304,9 +321,16 @@ class TradingBot:
         a, c = strat_params[strategy_idx-1]
 
         try:
-            df_calc = self.history_df.copy()
-            df_calc = add_indicators(df_calc)
-            df_ut = ut_bot(df_calc, a=a, c=c)
+            # Thread safety: copy the dataframe on the main thread before offloading
+            df_snapshot = self.history_df.copy()
+
+            # Offload CPU-bound calculations to background thread to prevent event loop blocking
+            def process_signals(df):
+                df_calc = add_indicators(df)
+                df_ut = ut_bot(df_calc, a=a, c=c)
+                return df_ut
+
+            df_ut = await asyncio.to_thread(process_signals, df_snapshot)
 
             # Signal is checked on the candle that JUST closed (index -2)
             # Index -1 is the current building candle
@@ -321,7 +345,8 @@ class TradingBot:
 
                 ml = await self.get_ml_filter(symbol, strategy_idx)
                 if ml:
-                    df_ml = ml.filter_signals(df_ut)
+                    # Offload ML filtering as well
+                    df_ml = await asyncio.to_thread(ml.filter_signals, df_ut)
                     ml_sig = df_ml.iloc[-2]
                     if ml_sig['buy'] or ml_sig['sell']:
                         self.log(f"NEURAL FILTER: SIGNAL PASSED. Executing {side} trade.")

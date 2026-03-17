@@ -71,6 +71,10 @@ class TradingBot:
             self.log("Authorizing...")
             auth = await asyncio.wait_for(self.api.authorize(self.config['api_token']), timeout=20)
 
+            if 'error' in auth:
+                self.log(f"Authorization error: {auth['error'].get('message')}")
+                return False
+
             self.balance = float(auth['authorize']['balance'])
             self.log(f"Connected to Deriv. Balance: ${self.balance:.2f}")
             self.update_status()
@@ -225,6 +229,10 @@ class TradingBot:
         self.update_status()
 
     async def ohlc_subscription_loop(self):
+        """
+        ⚡ Bolt Optimized: Replaced the simple sleep(5) with a 30-second heartbeat ping mechanism.
+        This keeps the connection alive and detects disconnections early.
+        """
         symbol = self.config['symbol']
         while self.is_running:
             try:
@@ -240,9 +248,15 @@ class TradingBot:
                 self.log(f"OHLC Subscription active for {symbol}.")
                 self.ohlc_subscription.subscribe(self.handle_ohlc_update)
 
-                # Keep the task alive and monitor connection
+                # Keep-alive ping loop (every 30 seconds as recommended by Deriv docs)
                 while self.is_running:
-                    await asyncio.sleep(5)
+                    try:
+                        # Heartbeat ping
+                        await asyncio.wait_for(self.api.ping({'ping': 1}), timeout=5)
+                        await asyncio.sleep(30)
+                    except (asyncio.TimeoutError, Exception) as e:
+                        self.log(f"Heartbeat timeout/error: {e}. Reconnecting...")
+                        break
 
             except asyncio.CancelledError:
                 self.log("OHLC subscription cancelled.")
@@ -290,6 +304,10 @@ class TradingBot:
 
 
     async def check_signals(self):
+        """
+        ⚡ Bolt Optimized: Offloaded CPU-bound indicator and signal calculation
+        to a background thread to prevent event loop blocking.
+        """
         if len(self.history_df) < 200:
             self.log(f"Buffer insufficient ({len(self.history_df)} candles). Need at least 200.")
             return
@@ -304,9 +322,14 @@ class TradingBot:
         a, c = strat_params[strategy_idx-1]
 
         try:
-            df_calc = self.history_df.copy()
-            df_calc = add_indicators(df_calc)
-            df_ut = ut_bot(df_calc, a=a, c=c)
+            # CPU intensive part - indicator and strategy calculation
+            def calculate_signals_sync(df_input, a_val, c_val):
+                df_calc = df_input.copy()
+                df_calc = add_indicators(df_calc)
+                return ut_bot(df_calc, a=a_val, c=c_val)
+
+            # Move compute-intensive indicators to thread
+            df_ut = await asyncio.to_thread(calculate_signals_sync, self.history_df, a, c)
 
             # Signal is checked on the candle that JUST closed (index -2)
             # Index -1 is the current building candle
@@ -321,7 +344,8 @@ class TradingBot:
 
                 ml = await self.get_ml_filter(symbol, strategy_idx)
                 if ml:
-                    df_ml = ml.filter_signals(df_ut)
+                    # ML filtering is also CPU intensive, offload it
+                    df_ml = await asyncio.to_thread(ml.filter_signals, df_ut)
                     ml_sig = df_ml.iloc[-2]
                     if ml_sig['buy'] or ml_sig['sell']:
                         self.log(f"NEURAL FILTER: SIGNAL PASSED. Executing {side} trade.")

@@ -240,9 +240,11 @@ class TradingBot:
                 self.log(f"OHLC Subscription active for {symbol}.")
                 self.ohlc_subscription.subscribe(self.handle_ohlc_update)
 
-                # Keep the task alive and monitor connection
+                # Keep the task alive and monitor connection with heartbeat pings
                 while self.is_running:
-                    await asyncio.sleep(5)
+                    # Deriv API recommends periodic pings to keep WebSocket alive
+                    await self.api.ping({'ping': 1})
+                    await asyncio.sleep(30)
 
             except asyncio.CancelledError:
                 self.log("OHLC subscription cancelled.")
@@ -288,6 +290,17 @@ class TradingBot:
                     self.log(f"Bot session active. Current candle open time: {time.ctime(candle_epoch)}")
                 self.last_candle_epoch = candle_epoch
 
+    def _process_signals_sync(self, df_history, symbol, strategy_idx):
+        """CPU-intensive signal calculation to be run in a thread."""
+        strat_params = [
+            (1, 10), (2, 20), (3, 30), (1, 20), (2, 10),
+            (3, 20), (1, 30), (2, 30), (3, 10), (1.5, 15)
+        ]
+        a, c = strat_params[strategy_idx-1]
+
+        df_calc = add_indicators(df_history)
+        df_ut = ut_bot(df_calc, a=a, c=c)
+        return df_ut
 
     async def check_signals(self):
         if len(self.history_df) < 200:
@@ -297,16 +310,11 @@ class TradingBot:
         symbol = self.config['symbol']
         strategy_idx = int(self.config['strategy'])
 
-        strat_params = [
-            (1, 10), (2, 20), (3, 30), (1, 20), (2, 10),
-            (3, 20), (1, 30), (2, 30), (3, 10), (1.5, 15)
-        ]
-        a, c = strat_params[strategy_idx-1]
-
         try:
-            df_calc = self.history_df.copy()
-            df_calc = add_indicators(df_calc)
-            df_ut = ut_bot(df_calc, a=a, c=c)
+            # Offload heavy signal processing to background thread to prevent event loop blocking
+            # Copy history_df to prevent thread safety issues
+            df_history = self.history_df.copy()
+            df_ut = await asyncio.to_thread(self._process_signals_sync, df_history, symbol, strategy_idx)
 
             # Signal is checked on the candle that JUST closed (index -2)
             # Index -1 is the current building candle
@@ -321,6 +329,8 @@ class TradingBot:
 
                 ml = await self.get_ml_filter(symbol, strategy_idx)
                 if ml:
+                    # filter_signals is also CPU-intensive but currently fast enough,
+                    # can be moved to thread if needed.
                     df_ml = ml.filter_signals(df_ut)
                     ml_sig = df_ml.iloc[-2]
                     if ml_sig['buy'] or ml_sig['sell']:

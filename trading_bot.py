@@ -240,9 +240,17 @@ class TradingBot:
                 self.log(f"OHLC Subscription active for {symbol}.")
                 self.ohlc_subscription.subscribe(self.handle_ohlc_update)
 
-                # Keep the task alive and monitor connection
+                # Keep the task alive and monitor connection with heartbeat ping
                 while self.is_running:
-                    await asyncio.sleep(5)
+                    # Deriv recommends a ping every 30 seconds
+                    await asyncio.sleep(30)
+                    if self.is_running and self.api:
+                        try:
+                            # Use a simple ping to keep the connection alive
+                            await self.api.ping({'ping': 1})
+                        except Exception as e:
+                            self.log(f"Heartbeat ping failed: {e}")
+                            break # Break inner loop to trigger reconnection
 
             except asyncio.CancelledError:
                 self.log("OHLC subscription cancelled.")

@@ -66,53 +66,56 @@ class Backtester:
         self.exit_candles = exit_candles
 
     def run(self):
-        trades = []
         df = self.df.reset_index(drop=True)
+        n = len(df)
 
-        for i in range(len(df) - self.exit_candles - 1):
-            if df['buy'].iloc[i]:
-                # Entry at next candle open
-                entry_idx = i + 1
-                exit_idx = i + self.exit_candles
+        if n <= self.exit_candles + 1:
+            return pd.DataFrame()
 
-                entry_price = df['open'].iloc[entry_idx]
-                exit_price = df['close'].iloc[exit_idx]
+        # Vectorized signal detection with 'elif' logic (buy has priority)
+        mask_buy = df['buy'].values[:-(self.exit_candles + 1)]
+        mask_sell = df['sell'].values[:-(self.exit_candles + 1)] & (~mask_buy)
 
-                profit = exit_price - entry_price
-                win = profit > 0
+        buy_indices = np.where(mask_buy)[0]
+        sell_indices = np.where(mask_sell)[0]
 
-                trades.append({
-                    'type': 'buy',
-                    'entry_time': df['epoch'].iloc[entry_idx],
-                    'entry_price': entry_price,
-                    'exit_time': df['epoch'].iloc[exit_idx],
-                    'exit_price': exit_price,
-                    'profit': profit,
-                    'win': win
-                })
+        trades = []
 
-            elif df['sell'].iloc[i]:
-                # Entry at next candle open
-                entry_idx = i + 1
-                exit_idx = i + self.exit_candles
+        if len(buy_indices) > 0:
+            entry_indices = buy_indices + 1
+            exit_indices = buy_indices + self.exit_candles
 
-                entry_price = df['open'].iloc[entry_idx]
-                exit_price = df['close'].iloc[exit_idx]
+            buy_trades = pd.DataFrame({
+                'type': 'buy',
+                'entry_time': df['epoch'].values[entry_indices],
+                'entry_price': df['open'].values[entry_indices],
+                'exit_time': df['epoch'].values[exit_indices],
+                'exit_price': df['close'].values[exit_indices],
+                'profit': df['close'].values[exit_indices] - df['open'].values[entry_indices],
+                'win': (df['close'].values[exit_indices] - df['open'].values[entry_indices]) > 0
+            })
+            trades.append(buy_trades)
 
-                profit = entry_price - exit_price
-                win = profit > 0
+        if len(sell_indices) > 0:
+            entry_indices = sell_indices + 1
+            exit_indices = sell_indices + self.exit_candles
 
-                trades.append({
-                    'type': 'sell',
-                    'entry_time': df['epoch'].iloc[entry_idx],
-                    'entry_price': entry_price,
-                    'exit_time': df['epoch'].iloc[exit_idx],
-                    'exit_price': exit_price,
-                    'profit': profit,
-                    'win': win
-                })
+            sell_trades = pd.DataFrame({
+                'type': 'sell',
+                'entry_time': df['epoch'].values[entry_indices],
+                'entry_price': df['open'].values[entry_indices],
+                'exit_time': df['epoch'].values[exit_indices],
+                'exit_price': df['close'].values[exit_indices],
+                'profit': df['open'].values[entry_indices] - df['close'].values[exit_indices],
+                'win': (df['open'].values[entry_indices] - df['close'].values[exit_indices]) > 0
+            })
+            trades.append(sell_trades)
 
-        return pd.DataFrame(trades)
+        if not trades:
+            return pd.DataFrame()
+
+        # Sort by entry_time to maintain chronological order as in original loop
+        return pd.concat(trades).sort_values('entry_time').reset_index(drop=True)
 
 def analyze_performance(trades_df, interval_days=60):
     if trades_df.empty:
@@ -148,15 +151,30 @@ def analyze_performance(trades_df, interval_days=60):
     return pd.DataFrame(results)
 
 def calculate_max_consecutive_losses(wins_series):
-    max_losses = 0
-    current_losses = 0
-    for win in wins_series:
-        if not win:
-            current_losses += 1
-            max_losses = max(max_losses, current_losses)
-        else:
-            current_losses = 0
-    return max_losses
+    if len(wins_series) == 0:
+        return 0
+
+    # Vectorized approach to find max consecutive losses (False values)
+    wins = np.array(wins_series, dtype=bool)
+
+    # We want to find streaks of False, so we look at True values as separators
+    # Pad with True at both ends to handle streaks at start/end
+    is_win = np.concatenate(([True], wins, [True]))
+
+    # Find indices where values change from True to False (start of loss streak) or vice versa
+    # diff will be -1 for True->False, 1 for False->True, 0 otherwise
+    diffs = np.diff(is_win.astype(int))
+
+    # Indices where a streak of False starts (True -> False)
+    starts = np.where(diffs == -1)[0]
+    # Indices where a streak of False ends (False -> True)
+    ends = np.where(diffs == 1)[0]
+
+    if len(starts) == 0:
+        return 0
+
+    # The length of each streak is end_index - start_index
+    return int(np.max(ends - starts))
 
 def simulate_financials(trades_df, initial_balance=1000, risk_pc=1, win_payout=0.95):
     """

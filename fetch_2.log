@@ -1,0 +1,24 @@
+[BOOM500 60s] Fetching up to 2026-03-20 05:57:54
+[BOOM500 60s] Fetching up to 2026-03-16 18:37:59
+[BOOM500 60s] Fetching up to 2026-03-13 07:17:59
+[BOOM500 60s] Fetching up to 2026-03-09 19:57:59
+[BOOM500 60s] Fetching up to 2026-03-06 08:37:59
+[BOOM500 60s] Fetching up to 2026-03-02 21:17:59
+[BOOM500 60s] Fetching up to 2026-02-27 09:57:59
+[BOOM500 60s] Fetching up to 2026-02-23 22:37:59
+[BOOM500 60s] Fetching up to 2026-02-20 11:17:59
+[BOOM500 900s] Fetching up to 2026-03-20 05:58:17
+[CRASH500 60s] Fetching up to 2026-03-20 05:58:20
+[CRASH500 60s] Fetching up to 2026-03-16 18:38:59
+[CRASH500 60s] Fetching up to 2026-03-13 07:18:59
+[CRASH500 60s] Fetching up to 2026-03-09 19:58:59
+[CRASH500 60s] Fetching up to 2026-03-06 08:38:59
+[CRASH500 60s] Fetching up to 2026-03-02 21:18:59
+[CRASH500 60s] Fetching up to 2026-02-27 09:58:59
+[CRASH500 60s] Fetching up to 2026-02-23 22:38:59
+[CRASH500 60s] Fetching up to 2026-02-20 11:18:59
+[CRASH500 900s] Fetching up to 2026-03-20 05:58:43
+Saved 45000 candles to data/BOOM500_60s_30d.csv
+Saved 5000 candles to data/BOOM500_900s_30d.csv
+Saved 45000 candles to data/CRASH500_60s_30d.csv
+Saved 5000 candles to data/CRASH500_900s_30d.csv

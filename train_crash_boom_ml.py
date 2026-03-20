@@ -16,10 +16,13 @@ def train_ml_filter_crash_boom(symbol, tf_1m_path, tf_15m_path):
     # Prepare features for ML
     df_with_signals['rsi_15m'] = ta.momentum.rsi(df_15m['close'], window=14).reindex(df_15m.index).ffill()
     # A simple way to get 15m RSI onto 1m
-    rsi_15m_map = ta.momentum.rsi(df_15m['close'], window=14).to_dict()
-    epoch_to_rsi_15m = {df_15m['epoch'].iloc[i]: ta.momentum.rsi(df_15m['close'], window=14).iloc[i] for i in range(len(df_15m))}
+    # Use shift(1) to avoid look-ahead bias (only use data from the PREVIOUS closed 15m candle)
+    rsi_15m_series = ta.momentum.rsi(df_15m['close'], window=14).shift(1)
+    epoch_to_rsi_15m = {df_15m['epoch'].iloc[i]: rsi_15m_series.iloc[i] for i in range(len(df_15m))}
     def get_rsi_15m(epoch):
+        # Round down to get the start of the current 15m window
         epoch_15m = (epoch // 900) * 900
+        # Return the RSI of the candle that closed before this window
         return epoch_to_rsi_15m.get(epoch_15m, 50)
 
     df_with_signals['rsi_15m'] = df_with_signals['epoch'].apply(get_rsi_15m)

@@ -23,3 +23,11 @@ Sheldon Natenberg's work, while focused on options, provides a robust framework 
 *   **Concept:** The value of a position can "decay" if the expected volatility doesn't realize.
 *   **Application to Crash/Boom:** Holding a "Buy" on Boom 500 while it drifts down is like holding a long option that is losing Theta.
 *   **Strategy Tip:** Use Multi-Timeframe analysis (15m for trend, 1m for entry) to ensure you are only "Long Volatility" (expecting a spike) when the higher timeframe shows a supportive trend.
+
+### 5. Multiplier Trading vs. Options (Strategic Shift)
+*   **Natenberg Insight:** He emphasizes managing the "Greeks." In Multipliers, we don't have Vega or Theta in the same way, but Delta (directional risk) is amplified.
+*   **The Multiplier Edge:** Unlike Rise and Fall where you just need to be "above/below" at a fixed time, Multipliers allow you to capture the **full magnitude** of the spike. This aligns perfectly with Natenberg's focus on capturing "Fat Tail" events.
+*   **Expected Value (EV):** In a market with extreme skew, the probability of a small loss (drift) is high, but the payoff of a large win (spike) is massive.
+    *   *Formula:* `EV = (Prob(Win) * AvgWin) - (Prob(Loss) * AvgLoss)`
+    *   In Multipliers, a x300 leverage means a 1% move results in a 300% ROI.
+*   **Stop-Out as a "Put Option":** Deriv's stop-out at -100% acts like a built-in long put option that limits your maximum loss to your stake, regardless of how far the price crashes against you. This allows for aggressive positioning in high-skew markets.

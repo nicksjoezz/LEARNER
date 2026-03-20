@@ -36,16 +36,14 @@ def crash_boom_mtf_strategy(df_1m, df_15m, symbol):
     df_1m['sell'] = False
 
     if 'BOOM' in symbol:
-        # Boom: Long only.
-        # Trend is UP (EMA 20 on 15m) AND 1m Pullback (RSI < 40) AND momentum (close > ema_5)
+        # Catching the Boom Spike:
+        # Scalping strategy for Multipliers
+        # Trend is UP (15m) + Deep Pullback (1m RSI < 35)
         df_1m.loc[(df_1m['15m_trend_up'] == True) &
-                  (df_1m['rsi'] < 40) &
-                  (df_1m['close'] > df_1m['ema_5']), 'buy'] = True
+                  (df_1m['rsi'] < 35), 'buy'] = True
     else:
-        # Crash: Short only.
-        # Trend is DOWN (15m EMA 20) AND 1m Pullback (RSI > 60) AND momentum (close < ema_5)
+        # Catching the Crash:
         df_1m.loc[(df_1m['15m_trend_up'] == False) &
-                  (df_1m['rsi'] > 60) &
-                  (df_1m['close'] < df_1m['ema_5']), 'sell'] = True
+                  (df_1m['rsi'] > 65), 'sell'] = True
 
     return df_1m

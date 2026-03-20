@@ -27,6 +27,10 @@ class TradingBot:
         self.history_df = pd.DataFrame()
         self.current_symbol = ""
         self.ohlc_subscription = None
+        # Subscription objects to prevent GC and allow disposal
+        self.poc_sub_obj = None
+        self.bal_sub_obj = None
+        self.ohlc_sub_obj = None
 
     def log(self, message):
         timestamp = time.strftime('%H:%M:%S', time.gmtime())
@@ -52,6 +56,16 @@ class TradingBot:
         }
 
     async def cleanup_connection(self):
+        # Dispose subscriptions
+        for sub_attr in ['poc_sub_obj', 'bal_sub_obj', 'ohlc_sub_obj']:
+            sub = getattr(self, sub_attr, None)
+            if sub:
+                try:
+                    sub.dispose()
+                except:
+                    pass
+                setattr(self, sub_attr, None)
+
         if self.api:
             self.log("Closing Deriv API connection...")
             try:
@@ -87,23 +101,33 @@ class TradingBot:
         try:
             # Subscribe to proposal_open_contract to get results
             poc_sub = await asyncio.wait_for(self.api.subscribe({'proposal_open_contract': 1, 'subscribe': 1}), timeout=20)
-            poc_sub.subscribe(self.handle_contract_update)
+            self.poc_sub_obj = poc_sub.subscribe(self.handle_contract_update)
 
             # Subscribe to balance
             bal_sub = await asyncio.wait_for(self.api.subscribe({'balance': 1, 'subscribe': 1}), timeout=20)
-            bal_sub.subscribe(self.handle_balance_update)
+            self.bal_sub_obj = bal_sub.subscribe(self.handle_balance_update)
             self.log("Successfully subscribed to account updates.")
         except Exception as e:
             self.log(f"Subscription error: {e}")
 
     def handle_balance_update(self, data):
-        if 'balance' in data:
-            self.balance = float(data['balance']['balance'])
-            self.update_status()
+        try:
+            if 'error' in data:
+                self.log(f"Balance update error: {data['error'].get('message')}")
+                return
+            if 'balance' in data:
+                self.balance = float(data['balance']['balance'])
+                self.update_status()
+        except Exception as e:
+            self.log(f"Error in handle_balance_update: {e}")
 
     def handle_contract_update(self, data):
-        if 'proposal_open_contract' in data:
-            contract = data['proposal_open_contract']
+        try:
+            if 'error' in data:
+                self.log(f"Contract update error: {data['error'].get('message')}")
+                return
+            if 'proposal_open_contract' in data:
+                contract = data['proposal_open_contract']
             if contract['is_sold']:
                 status = contract['status'] # won, lost
                 profit = float(contract['profit'])
@@ -120,6 +144,8 @@ class TradingBot:
 
                     del self.active_contracts[contract_id]
                     self.update_status()
+        except Exception as e:
+            self.log(f"Error in handle_contract_update: {e}")
 
     async def get_ml_filter(self, symbol, strategy_idx):
         ml = model_manager.get_model(symbol, strategy_idx)
@@ -199,6 +225,11 @@ class TradingBot:
                 'granularity': 300,
                 'style': 'candles'
             }), timeout=60)
+
+            if 'error' in response:
+                self.log(f"API Error fetching history: {response['error'].get('message')}")
+                return
+
             if 'candles' in response:
                 self.history_df = pd.DataFrame(response['candles'])
                 self.last_candle_epoch = int(self.history_df.iloc[-1]['epoch'])
@@ -238,7 +269,7 @@ class TradingBot:
                 }), timeout=30)
 
                 self.log(f"OHLC Subscription active for {symbol}.")
-                self.ohlc_subscription.subscribe(self.handle_ohlc_update)
+                self.ohlc_sub_obj = self.ohlc_subscription.subscribe(self.handle_ohlc_update)
 
                 # Keep the task alive and monitor connection
                 while self.is_running:
@@ -257,28 +288,38 @@ class TradingBot:
                 except: pass
 
     def handle_ohlc_update(self, data):
-        if 'error' in data:
-            self.log(f"Subscription error: {data['error'].get('message')}")
-            return
+        try:
+            if 'error' in data:
+                self.log(f"Subscription error: {data['error'].get('message')}")
+                return
 
-        if 'ohlc' in data:
-            ohlc = data['ohlc']
-            candle_epoch = int(ohlc['open_time'])
+            if 'ohlc' in data:
+                ohlc = data['ohlc']
+                candle_epoch = int(ohlc['open_time'])
 
-            # Real-time update of history_df
-            new_candle = {
-                'epoch': int(ohlc['open_time']),
-                'open': float(ohlc['open']),
-                'high': float(ohlc['high']),
-                'low': float(ohlc['low']),
-                'close': float(ohlc['close'])
-            }
-            new_row = pd.DataFrame([new_candle])
-            self.history_df = pd.concat([self.history_df, new_row]).drop_duplicates(subset=['epoch'], keep='last').sort_values('epoch')
-            if len(self.history_df) > 500:
-                self.history_df = self.history_df.iloc[-500:]
+                # Performance Optimization: Optimized OHLC buffer update
+                # Reduces event loop blocking by avoiding full DataFrame rebuilds/sorts on every tick
+                if not self.history_df.empty and self.history_df.iloc[-1]['epoch'] == candle_epoch:
+                    # Update existing candle in-place
+                    # Using .iloc[-1] for index-label-agnostic update of the last row
+                    last_idx = self.history_df.index[-1]
+                    self.history_df.at[last_idx, 'open'] = float(ohlc['open'])
+                    self.history_df.at[last_idx, 'high'] = float(ohlc['high'])
+                    self.history_df.at[last_idx, 'low'] = float(ohlc['low'])
+                    self.history_df.at[last_idx, 'close'] = float(ohlc['close'])
+                else:
+                    # Append new candle and maintain fixed size
+                    new_row = pd.DataFrame([{
+                        'epoch': candle_epoch,
+                        'open': float(ohlc['open']),
+                        'high': float(ohlc['high']),
+                        'low': float(ohlc['low']),
+                        'close': float(ohlc['close'])
+                    }])
+                    # Use ignore_index=True to ensure unique index labels
+                    self.history_df = pd.concat([self.history_df, new_row], ignore_index=True).tail(500)
 
-            # Detect new candle (candle closed)
+                # Detect new candle (candle closed)
             if candle_epoch > self.last_candle_epoch:
                 if self.last_candle_epoch != 0:
                     self.log(f"CANDLE CLOSED: {time.ctime(self.last_candle_epoch)}")
@@ -288,6 +329,8 @@ class TradingBot:
                     self.log(f"Bot session active. Current candle open time: {time.ctime(candle_epoch)}")
                 self.last_candle_epoch = candle_epoch
 
+        except Exception as e:
+            self.log(f"Fatal error in OHLC update: {e}")
 
     async def check_signals(self):
         if len(self.history_df) < 200:

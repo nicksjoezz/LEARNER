@@ -15,14 +15,14 @@ from crash_boom_strategy import crash_boom_mtf_strategy
 STRATEGY_CONFIG = {
     'BOOM500': {
         'multiplier': 300,
-        'tp_usd': 50, # Aiming for $50 profit on a $10 stake (500% ROI)
-        'sl_usd': 9.5, # Deriv stop-out is at 100% loss ($10), we set slightly before
+        'tp_usd': 15.0, # Optimized: capture frequent medium spikes
+        'sl_usd': 2.0,  # Optimized: tight stop to preserve capital
         'direction': 'buy'
     },
     'CRASH500': {
         'multiplier': 300,
-        'tp_usd': 30, # Aiming for $30 profit on a $10 stake (300% ROI)
-        'sl_usd': 9.5,
+        'tp_usd': 10.0,
+        'sl_usd': 2.0,
         'direction': 'sell'
     }
 }

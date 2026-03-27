@@ -32,10 +32,12 @@ AlgoRun is a professional automated trading bot for Deriv's **Crash 500** and **
     }
     ```
 
-3.  **Launch the Bot**:
+3.  **Launch the Web Dashboard**:
     ```bash
-    python3 live_multiplier_bot.py
+    python3 app.py
     ```
+4.  **Access the Dashboard**:
+    Open your browser and navigate to `http://localhost:5000`.
 
 ## 📖 Documentation
 - [Detailed Strategy & Backtest Report](detail.md)

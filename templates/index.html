@@ -1,0 +1,98 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <!-- Status Card -->
+    <div class="trading-card p-6 flex flex-col items-center justify-center">
+        <h3 class="text-gray-400 text-sm uppercase mb-2">Bot Status</h3>
+        <div id="status-indicator" class="w-16 h-16 rounded-full flex items-center justify-center border-4 border-gray-600 mb-4">
+            <i class="fas fa-power-off text-2xl"></i>
+        </div>
+        <p id="status-text" class="text-xl font-bold">Inactive</p>
+        <button id="toggle-btn" class="mt-6 w-full py-2 rounded font-bold btn-primary">START TRADING</button>
+    </div>
+
+    <!-- Balance Card -->
+    <div class="trading-card p-6">
+        <h3 class="text-gray-400 text-sm uppercase mb-4">Account Balance</h3>
+        <div class="flex items-baseline space-x-2">
+            <span id="balance-val" class="text-4xl font-bold text-white">$0.00</span>
+            <span class="text-gray-500">USD</span>
+        </div>
+        <div class="mt-6 p-4 bg-[#0d1117] rounded border border-[#30363d]">
+            <p class="text-xs text-gray-500 uppercase">Trading Mode</p>
+            <p class="font-bold text-green-500 uppercase tracking-widest">{{ config.mode }}</p>
+        </div>
+    </div>
+
+    <!-- Strategy Info -->
+    <div class="trading-card p-6">
+        <h3 class="text-gray-400 text-sm uppercase mb-4">Active Strategy</h3>
+        <div class="space-y-4">
+            <div class="flex justify-between items-center border-b border-[#30363d] pb-2">
+                <span>Targets</span>
+                <span class="text-white font-mono text-sm">BOOM500, CRASH500</span>
+            </div>
+            <div class="flex justify-between items-center border-b border-[#30363d] pb-2">
+                <span>Multiplier</span>
+                <span class="text-white font-mono text-sm">x300</span>
+            </div>
+            <div class="flex justify-between items-center border-b border-[#30363d] pb-2">
+                <span>Method</span>
+                <span class="text-white font-mono text-sm">MTF RSI exhaustion</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Logs Section -->
+<div class="mt-8 trading-card">
+    <div class="p-4 border-b border-[#30363d] flex justify-between items-center">
+        <h3 class="text-gray-400 text-sm uppercase">Live Execution Logs</h3>
+        <span class="text-xs text-green-500"><i class="fas fa-circle animate-pulse mr-1"></i> Real-time</span>
+    </div>
+    <div id="log-container" class="h-96 overflow-y-auto p-4 font-mono text-sm space-y-1 bg-[#0d1117]">
+        <div class="text-gray-600">Waiting for bot initialization...</div>
+    </div>
+</div>
+
+<script>
+    let botActive = false;
+    const toggleBtn = document.getElementById('toggle-btn');
+    const statusText = document.getElementById('status-text');
+    const statusIndicator = document.getElementById('status-indicator');
+    const logContainer = document.getElementById('log-container');
+    const balanceVal = document.getElementById('balance-val');
+
+    toggleBtn.onclick = () => {
+        botActive = !botActive;
+        socket.emit('toggle_bot', { active: botActive });
+    };
+
+    socket.on('status_update', (data) => {
+        botActive = data.active;
+        if (botActive) {
+            toggleBtn.innerText = 'STOP TRADING';
+            toggleBtn.classList.replace('btn-primary', 'btn-danger');
+            statusText.innerText = 'Live Running';
+            statusText.classList.add('text-green-500');
+            statusIndicator.classList.replace('border-gray-600', 'border-green-500');
+            statusIndicator.classList.add('active-glow');
+        } else {
+            toggleBtn.innerText = 'START TRADING';
+            toggleBtn.classList.replace('btn-danger', 'btn-primary');
+            statusText.innerText = 'Inactive';
+            statusText.classList.remove('text-green-500');
+            statusIndicator.classList.replace('border-green-500', 'border-gray-600');
+            statusIndicator.classList.remove('active-glow');
+        }
+        if (data.balance) balanceVal.innerText = data.balance;
+    });
+
+    socket.on('log_update', (data) => {
+        const div = document.createElement('div');
+        div.className = data.msg.includes('SUCCESS') ? 'text-green-400' : (data.msg.includes('ERROR') ? 'text-red-400' : 'text-gray-300');
+        div.innerText = data.msg;
+        logContainer.prepend(div);
+    });
+</script>
+{% endblock %}

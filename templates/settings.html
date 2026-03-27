@@ -1,0 +1,56 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="max-w-2xl mx-auto trading-card p-8">
+    <div class="mb-8 border-b border-[#30363d] pb-4">
+        <h2 class="text-2xl font-bold text-white">Bot Configuration</h2>
+        <p class="text-gray-400 text-sm mt-1">Configure your Deriv credentials and trading mode.</p>
+    </div>
+
+    <form id="settings-form" class="space-y-6">
+        <div>
+            <label class="block text-sm font-medium text-gray-300 mb-2">API Token</label>
+            <input type="password" id="api_token" value="{{ config.api_token }}"
+                   class="w-full bg-[#0d1117] border border-[#30363d] rounded p-2 text-white focus:border-green-500 outline-none"
+                   placeholder="Enter your Deriv API Token">
+            <p class="text-xs text-gray-500 mt-2 italic">* Generate this in your Deriv Account Settings under API Token.</p>
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-gray-300 mb-2">Trading Mode</label>
+            <div class="flex items-center space-x-4">
+                <label class="flex items-center cursor-pointer">
+                    <input type="radio" name="mode" value="demo" class="hidden peer" {% if config.mode == 'demo' %}checked{% endif %}>
+                    <div class="px-4 py-2 bg-[#0d1117] border border-[#30363d] rounded peer-checked:border-green-500 peer-checked:bg-green-900/20 text-sm">
+                        Demo Account
+                    </div>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                    <input type="radio" name="mode" value="real" class="hidden peer" {% if config.mode == 'real' %}checked{% endif %}>
+                    <div class="px-4 py-2 bg-[#0d1117] border border-[#30363d] rounded peer-checked:border-red-500 peer-checked:bg-red-900/20 text-sm">
+                        Real Account
+                    </div>
+                </label>
+            </div>
+            <p class="text-xs text-red-500 mt-3 font-semibold uppercase tracking-tighter">
+                <i class="fas fa-exclamation-triangle mr-1"></i> Warning: Real account trading involves capital risk.
+            </p>
+        </div>
+
+        <div class="pt-6 border-t border-[#30363d]">
+            <button type="submit" class="w-full btn-primary py-3 rounded font-bold uppercase tracking-widest text-white shadow-lg">
+                Save Configuration
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+    document.getElementById('settings-form').onsubmit = (e) => {
+        e.preventDefault();
+        const api_token = document.getElementById('api_token').value;
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+
+        socket.emit('save_settings', { api_token, mode });
+    };
+</script>
+{% endblock %}

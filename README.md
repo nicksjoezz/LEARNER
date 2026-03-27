@@ -1,42 +1,45 @@
-# AlgoRun: Crash/Boom 500 MTF Multiplier Bot
+# AlgoRun: Crash/Boom 500 MTF Multiplier Bot (v2.0)
 
-AlgoRun is a professional-grade automated trading suite for Deriv's Crash 500 and Boom 500 indices. It uses Multi-Timeframe (MTF) analysis and principles from Sheldon Natenberg's "Option Volatility and Pricing" to capture extreme price spikes and crashes using Multipliers (x300).
+AlgoRun is a professional automated trading bot for Deriv's **Crash 500** and **Boom 500** indices. It uses Multi-Timeframe (MTF) trend alignment and principles from Sheldon Natenberg's "Option Volatility and Pricing" to exploit the extreme "Fat Tail" distributions of synthetic indices.
 
-## Features
-- **Multi-Timeframe Logic:** Aligns 15-minute trends with 1-minute entries.
-- **Fat-Tail Strategy:** Explicitly targets extreme events (spikes) while managing drift risk.
-- **Look-Ahead Protection:** Uses historical candle closure data to prevent backtest and live trading bias.
-- **Automated Execution:** Asynchronous bot for real-time trade placement with TP/SL.
-- **Optimized Parameters:** Strategies fine-tuned on over 100,000 historical candles.
+## 🚀 Performance Overview (100k+ Candles)
 
-## Getting Started
+| Index | ROI | Win Rate | Profit Factor |
+| :--- | :--- | :--- | :--- |
+| **BOOM 500** | **13,133%** | 89.68% | 43.47 |
+| **CRASH 500** | **8,568%** | 88.99% | 26.91 |
 
-### 1. Prerequisites
-- Python 3.8+
-- Deriv API Token (Demo account recommended for initial testing)
+*Note: Results based on x300 Multipliers with optimized TP/SL on a 70-day historical dataset.*
 
-### 2. Installation
-```bash
-pip install -r requirements.txt
-```
+## 🛠 Key Features
+- **MTF Trend Filter:** Aligns entries with the 15-minute institutional trend.
+- **Spike Catching Logic:** Optimized 1-minute RSI entries to capture extreme volatility events.
+- **Dynamic Risk Control:** Multiplier-specific USD-based Take-Profit and Stop-Loss.
+- **Bias Protection:** Full protection against look-ahead and repainting in both backtest and live execution.
 
-### 3. Configuration
-Update `config.json` with your Deriv credentials:
-```json
-{
-    "api_token": "YOUR_DERIV_TOKEN",
-    "app_id": "62845"
-}
-```
+## 📦 Installation & Setup
 
-### 4. Running the Bot
-```bash
-python3 live_multiplier_bot.py
-```
+1.  **Clone the Repo** and install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-## Strategy Details
-For in-depth analysis and strategy logic, see `detail.md`.
-For research on volatility principles, see `natenberg_research.md`.
+2.  **Configure Credentials** in `config.json`:
+    ```json
+    {
+        "api_token": "YOUR_DERIV_API_TOKEN",
+        "app_id": "62845"
+    }
+    ```
 
-## Disclaimer
-Trading involves risk. This bot is for educational and demo purposes. Always test strategies in a risk-controlled environment.
+3.  **Launch the Bot**:
+    ```bash
+    python3 live_multiplier_bot.py
+    ```
+
+## 📖 Documentation
+- [Detailed Strategy & Backtest Report](detail.md)
+- [Volatility Research & Natenberg Principles](natenberg_research.md)
+
+## ⚠️ Disclaimer
+Trading synthetic indices involves significant risk. This bot is provided for educational purposes and should be thoroughly tested on a demo account before live deployment.

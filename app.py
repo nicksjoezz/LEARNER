@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from flask_socketio import SocketIO
 import json
@@ -16,8 +19,10 @@ bot_thread = None
 def load_config():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)
-    return {"api_token": "", "app_id": "62845", "mode": "demo"}
+            conf = json.load(f)
+            if 'stake' not in conf: conf['stake'] = 10
+            return conf
+    return {"api_token": "", "app_id": "62845", "mode": "demo", "stake": 10}
 
 def save_config(config):
     with open(CONFIG_FILE, 'w') as f:
@@ -38,6 +43,7 @@ def handle_save_settings(data):
     config = load_config()
     config['api_token'] = data.get('api_token', config['api_token'])
     config['mode'] = data.get('mode', config['mode'])
+    config['stake'] = int(data.get('stake', 10))
     save_config(config)
     socketio.emit('notify', {'msg': 'Settings Saved Successfully'})
 
@@ -52,21 +58,27 @@ def handle_toggle_bot(data):
             socketio.emit('notify', {'msg': 'Error: API Token Missing'})
             return
 
+        if bot and bot.is_running:
+            return
+
         bot = MultiplierBot(api_token=config['api_token'], socketio=socketio)
-        # Start bot in a dedicated asyncio loop thread
+        bot.stake = config.get('stake', 10)
+
         def run_bot():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(bot.start())
-            loop.run_forever()
+            try:
+                loop.run_until_complete(bot.start())
+            except Exception as e:
+                print(f"Bot start error: {e}")
+            finally:
+                loop.close()
 
         threading.Thread(target=run_bot, daemon=True).start()
         socketio.emit('status_update', {'active': True})
     else:
         if bot:
-            # Need to properly stop the bot async
             socketio.emit('notify', {'msg': 'Stopping Bot...'})
-            # For simplicity in this bridge, we'll just flag it
             bot.is_running = False
             socketio.emit('status_update', {'active': False})
 

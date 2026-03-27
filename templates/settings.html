@@ -16,6 +16,13 @@
         </div>
 
         <div>
+            <label class="block text-sm font-medium text-gray-300 mb-2">Trade Stake (USD)</label>
+            <input type="number" id="stake" value="{{ config.stake }}"
+                   class="w-full bg-[#0d1117] border border-[#30363d] rounded p-2 text-white focus:border-green-500 outline-none"
+                   placeholder="Enter stake amount (e.g. 10)">
+        </div>
+
+        <div>
             <label class="block text-sm font-medium text-gray-300 mb-2">Trading Mode</label>
             <div class="flex items-center space-x-4">
                 <label class="flex items-center cursor-pointer">
@@ -49,8 +56,9 @@
         e.preventDefault();
         const api_token = document.getElementById('api_token').value;
         const mode = document.querySelector('input[name="mode"]:checked').value;
+        const stake = document.getElementById('stake').value;
 
-        socket.emit('save_settings', { api_token, mode });
+        socket.emit('save_settings', { api_token, mode, stake });
     };
 </script>
 {% endblock %}

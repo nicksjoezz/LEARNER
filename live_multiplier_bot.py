@@ -38,6 +38,7 @@ class MultiplierBot:
         self.last_15m_epoch = {}
         self.balance = 0.0
         self.currency = "USD"
+        self.stake = 10
         self.log_buffer = []
         self.main_task = None
 
@@ -96,7 +97,7 @@ class MultiplierBot:
 
     async def place_trade(self, symbol):
         config = STRATEGY_CONFIG[symbol]
-        stake = 10
+        stake = self.stake
         params = {
             "buy": 1, "price": stake,
             "parameters": {
@@ -119,7 +120,7 @@ class MultiplierBot:
         if not await self.connect(): return
         self.is_running = True
         self.update_status()
-        self.main_task = asyncio.create_task(self.main_loop(['BOOM500', 'CRASH500']))
+        await self.main_loop(['BOOM500', 'CRASH500'])
 
     async def stop(self):
         self.is_running = False
@@ -139,6 +140,11 @@ class MultiplierBot:
                         'ticks_history': symbol, 'end': 'latest', 'count': 5, 'granularity': 60, 'style': 'candles'
                     })
                     new_df = pd.DataFrame(res['candles'])
+                    # Persistence: Save to CSV as requested
+                    data_dir = 'market_data'
+                    os.makedirs(data_dir, exist_ok=True)
+                    new_df.to_csv(f"{data_dir}/{symbol}_1m_history.csv", mode='a', header=not os.path.exists(f"{data_dir}/{symbol}_1m_history.csv"), index=False)
+
                     last_epoch = new_df.iloc[-1]['epoch']
                     if last_epoch > self.last_1m_epoch[symbol]:
                         self.log(f"[{symbol}] New candle closed.")

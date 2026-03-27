@@ -36,6 +36,18 @@ AlgoRun is a professional automated trading bot for Deriv's **Crash 500** and **
     ```bash
     python3 app.py
     ```
+
+### 🐳 Docker Installation
+If you prefer using Docker:
+1.  **Build the Image**:
+    ```bash
+    docker build -t algorun-bot .
+    ```
+2.  **Run the Container**:
+    ```bash
+    docker run -p 5000:5000 algorun-bot
+    ```
+
 4.  **Access the Dashboard**:
     Open your browser and navigate to `http://localhost:5000`.
 

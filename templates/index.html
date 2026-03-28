@@ -63,12 +63,14 @@
     const logContainer = document.getElementById('log-container');
     const balanceVal = document.getElementById('balance-val');
 
-    toggleBtn.onclick = () => {
+    toggleBtn.onclick = (e) => {
+        e.preventDefault();
+        console.log("Toggle clicked, currently:", botActive);
         botActive = !botActive;
-        socket.emit('toggle_bot', { active: botActive });
+        window.socket.emit('toggle_bot', { active: botActive });
     };
 
-    socket.on('status_update', (data) => {
+    window.socket.on('status_update', (data) => {
         botActive = data.active;
         if (botActive) {
             toggleBtn.innerText = 'STOP TRADING';
@@ -88,7 +90,7 @@
         if (data.balance) balanceVal.innerText = data.balance;
     });
 
-    socket.on('log_update', (data) => {
+    window.socket.on('log_update', (data) => {
         const div = document.createElement('div');
         div.className = data.msg.includes('SUCCESS') ? 'text-green-400' : (data.msg.includes('ERROR') ? 'text-red-400' : 'text-gray-300');
         div.innerText = data.msg;

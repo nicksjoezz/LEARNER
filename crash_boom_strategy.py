@@ -19,8 +19,10 @@ def crash_boom_mtf_strategy(df_1m, df_15m, symbol):
     df_15m['prev_trend_up'] = df_15m['trend_up'].shift(1)
     trend_map = df_15m.set_index('epoch')['prev_trend_up'].to_dict()
     def get_trend(epoch):
+        # Ensure epoch is int
+        e = int(epoch)
         # Round epoch down to nearest 900 to find the START of the current 15m candle
-        epoch_15m = (epoch // 900) * 900
+        epoch_15m = (e // 900) * 900
         # return the trend of the candle that CLOSED just before this epoch
         return trend_map.get(epoch_15m, False)
 

@@ -82,13 +82,22 @@ class MultiplierBot:
         res_1m = await self.api.ticks_history({
             'ticks_history': symbol, 'end': 'latest', 'count': 500, 'granularity': 60, 'style': 'candles'
         })
-        self.history_1m[symbol] = pd.DataFrame(res_1m['candles'])
+        df_1m = pd.DataFrame(res_1m['candles'])
+        # Convert numeric columns explicitly
+        for col in ['open', 'high', 'low', 'close', 'epoch']:
+            df_1m[col] = pd.to_numeric(df_1m[col])
+        self.history_1m[symbol] = df_1m
+
         res_15m = await self.api.ticks_history({
             'ticks_history': symbol, 'end': 'latest', 'count': 100, 'granularity': 900, 'style': 'candles'
         })
-        self.history_15m[symbol] = pd.DataFrame(res_15m['candles'])
-        self.last_1m_epoch[symbol] = self.history_1m[symbol].iloc[-1]['epoch']
-        self.last_15m_epoch[symbol] = self.history_15m[symbol].iloc[-1]['epoch']
+        df_15m = pd.DataFrame(res_15m['candles'])
+        for col in ['open', 'high', 'low', 'close', 'epoch']:
+            df_15m[col] = pd.to_numeric(df_15m[col])
+        self.history_15m[symbol] = df_15m
+
+        self.last_1m_epoch[symbol] = int(self.history_1m[symbol].iloc[-1]['epoch'])
+        self.last_15m_epoch[symbol] = int(self.history_15m[symbol].iloc[-1]['epoch'])
         self.log(f"History initialized for {symbol}")
 
     def calculate_strategy(self, symbol):
@@ -145,47 +154,95 @@ class MultiplierBot:
         if not await self.connect(): return
         self.is_running = True
         self.update_status()
-        await self.main_loop(['BOOM500', 'CRASH500'])
+
+        symbols = ['BOOM500', 'CRASH500']
+        for s in symbols:
+            await self.fetch_initial_data(s)
+            # Start subscription for each symbol
+            asyncio.create_task(self.subscribe_candles(s))
+
+        self.log("All subscriptions active. Monitoring markets...")
+
+        while self.is_running:
+            await asyncio.sleep(1)
+
+    async def subscribe_candles(self, symbol):
+        self.log(f"Starting subscription for {symbol}")
+        loop = asyncio.get_event_loop()
+        queue = asyncio.Queue()
+
+        def on_next(msg):
+            # Deriv API (rx) might call this from a different thread
+            loop.call_soon_threadsafe(queue.put_nowait, msg)
+
+        def on_error(e):
+            self.log(f"Stream error for {symbol}: {e}", "error")
+
+        try:
+            # Subscribe to 1-minute candles
+            # Using count 1 to get the most recent state efficiently
+            subscription = await self.api.subscribe({
+                'ticks_history': symbol,
+                'end': 'latest',
+                'subscribe': 1,
+                'granularity': 60,
+                'style': 'candles',
+                'count': 1
+            })
+
+            # Use rx subscribe since the result is an Observable
+            subscription.subscribe(on_next=on_next, on_error=on_error)
+
+            while self.is_running:
+                msg = await queue.get()
+                if 'ohlc' in msg:
+                    candle = msg['ohlc']
+                    # Check if candle just CLOSED
+                    # We want 1-minute bars. Deriv sends OHLC updates.
+                    # The 'epoch' in the OHLC message is the START time of the candle.
+                    candle_start = int(candle['epoch'])
+
+                    if (candle_start // 60) > (self.last_1m_epoch[symbol] // 60):
+                        # A new minute has started! This means the PREVIOUS minute just closed.
+                        self.log(f"[{symbol}] Minute rollover detected ({candle_start}). Processing closed candle...")
+                        new_row = {
+                            'epoch': float(candle_start),
+                            'open': float(candle['open']),
+                            'high': float(candle['high']),
+                            'low': float(candle['low']),
+                            'close': float(candle['close'])
+                        }
+                        self.history_1m[symbol] = pd.concat([self.history_1m[symbol], pd.DataFrame([new_row])]).drop_duplicates('epoch').tail(500)
+                        self.last_1m_epoch[symbol] = candle_start
+
+                        # Data Persistence
+                        data_dir = 'market_data'
+                        os.makedirs(data_dir, exist_ok=True)
+                        pd.DataFrame([new_row]).to_csv(f"{data_dir}/{symbol}_1m_history.csv", mode='a', header=not os.path.exists(f"{data_dir}/{symbol}_1m_history.csv"), index=False)
+
+                        # Check 15m alignment
+                        if int(candle['epoch']) % 900 == 0:
+                            res_15 = await self.api.ticks_history({
+                                'ticks_history': symbol, 'end': 'latest', 'count': 1, 'granularity': 900, 'style': 'candles'
+                            })
+                            if 'candles' in res_15:
+                                df_15_new = pd.DataFrame(res_15['candles'])
+                                for col in ['open', 'high', 'low', 'close', 'epoch']:
+                                    df_15_new[col] = pd.to_numeric(df_15_new[col])
+                                self.history_15m[symbol] = pd.concat([self.history_15m[symbol], df_15_new]).drop_duplicates('epoch').tail(100)
+                                self.log(f"[{symbol}] 15m trend updated.")
+
+                        # Recalculate Strategy
+                        if self.calculate_strategy(symbol):
+                            self.log(f"ENTRY SIGNAL for {symbol}!")
+                            await self.place_trade(symbol)
+
+        except Exception as e:
+            self.log(f"Subscription error for {symbol}: {e}", "error")
 
     async def stop(self):
         self.is_running = False
-        if self.main_task:
-            self.main_task.cancel()
         if self.api:
             await self.api.disconnect()
         self.log("Bot stopped.")
         self.update_status()
-
-    async def main_loop(self, symbols):
-        for s in symbols: await self.fetch_initial_data(s)
-        while self.is_running:
-            for symbol in symbols:
-                try:
-                    res = await self.api.ticks_history({
-                        'ticks_history': symbol, 'end': 'latest', 'count': 5, 'granularity': 60, 'style': 'candles'
-                    })
-                    new_df = pd.DataFrame(res['candles'])
-                    # Persistence: Save only the NEWEST closed candle to CSV
-                    last_epoch = new_df.iloc[-1]['epoch']
-                    if last_epoch > self.last_1m_epoch.get(symbol, 0):
-                        data_dir = 'market_data'
-                        os.makedirs(data_dir, exist_ok=True)
-                        # Only save the last candle
-                        last_candle = new_df.tail(1)
-                        last_candle.to_csv(f"{data_dir}/{symbol}_1m_history.csv", mode='a', header=not os.path.exists(f"{data_dir}/{symbol}_1m_history.csv"), index=False)
-
-                    if last_epoch > self.last_1m_epoch[symbol]:
-                        self.log(f"[{symbol}] New candle closed.")
-                        self.history_1m[symbol] = pd.concat([self.history_1m[symbol], new_df]).drop_duplicates('epoch').tail(500)
-                        self.last_1m_epoch[symbol] = last_epoch
-                        if last_epoch % 900 == 0:
-                            res_15 = await self.api.ticks_history({
-                                'ticks_history': symbol, 'end': 'latest', 'count': 5, 'granularity': 900, 'style': 'candles'
-                            })
-                            self.history_15m[symbol] = pd.concat([self.history_15m[symbol], pd.DataFrame(res_15['candles'])]).drop_duplicates('epoch').tail(100)
-                        if self.calculate_strategy(symbol):
-                            self.log(f"ENTRY SIGNAL for {symbol}!")
-                            await self.place_trade(symbol)
-                except Exception as e:
-                    self.log(f"Loop error: {e}", "error")
-            await asyncio.sleep(10)

@@ -16,6 +16,9 @@
         .btn-danger:hover { background-color: #f85149; }
         .active-glow { box-shadow: 0 0 15px rgba(35, 134, 54, 0.4); }
     </style>
+    <script>
+        window.socket = io();
+    </script>
 </head>
 <body class="min-h-screen">
     <nav class="border-b border-[#30363d] p-4 bg-[#161b22]">
@@ -44,11 +47,10 @@
     </div>
 
     <script>
-        const socket = io();
         const toast = document.getElementById('toast');
         const toastMsg = document.getElementById('toast-msg');
 
-        socket.on('notify', (data) => {
+        window.socket.on('notify', (data) => {
             toastMsg.innerText = data.msg;
             toast.classList.remove('hidden', 'translate-y-10');
             setTimeout(() => {

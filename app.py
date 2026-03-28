@@ -1,30 +1,33 @@
-import eventlet
-eventlet.monkey_patch()
-
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request
 from flask_socketio import SocketIO
 import json
 import os
-import threading
 import asyncio
+import threading
+import time
 from live_multiplier_bot import MultiplierBot
 
 app = Flask(__name__)
-socketio = SocketIO(app, async_mode='eventlet')
+# Use threading as it's generally more stable with asyncio in this context
+socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*")
 
 CONFIG_FILE = 'config.json'
 bot = None
-background_api = None
+background_sync_started = False
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r') as f:
-            conf = json.load(f)
-            # Defaults
-            if 'stake' not in conf: conf['stake'] = 10
-            if 'stake_type' not in conf: conf['stake_type'] = 'fixed'
-            return conf
-    return {"api_token": "", "app_id": "62845", "mode": "demo", "stake": 10, "stake_type": "fixed"}
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                conf = json.load(f)
+                conf.setdefault('api_token', '')
+                conf.setdefault('app_id', '62845')
+                conf.setdefault('mode', 'demo')
+                conf.setdefault('stake', 10.0)
+                conf.setdefault('stake_type', 'fixed')
+                return conf
+        except: pass
+    return {"api_token": "", "app_id": "62845", "mode": "demo", "stake": 10.0, "stake_type": "fixed"}
 
 def save_config(config):
     with open(CONFIG_FILE, 'w') as f:
@@ -32,16 +35,24 @@ def save_config(config):
 
 @app.route('/')
 def index():
-    config = load_config()
-    return render_template('index.html', config=config)
+    return render_template('index.html', config=load_config())
 
 @app.route('/settings')
 def settings():
-    config = load_config()
-    return render_template('settings.html', config=config)
+    return render_template('settings.html', config=load_config())
+
+@socketio.on('connect')
+def handle_connect():
+    global background_sync_started
+    print("Client connected")
+    if not background_sync_started:
+        thread = threading.Thread(target=background_sync_logic, daemon=True)
+        thread.start()
+        background_sync_started = True
 
 @socketio.on('save_settings')
 def handle_save_settings(data):
+    print(f"Saving settings: {data}")
     config = load_config()
     config['api_token'] = data.get('api_token', config['api_token'])
     config['mode'] = data.get('mode', config['mode'])
@@ -49,74 +60,86 @@ def handle_save_settings(data):
     config['stake_type'] = data.get('stake_type', 'fixed')
     save_config(config)
     socketio.emit('notify', {'msg': 'Settings Saved Successfully'})
-    # Trigger re-connect for background task if token changed
-    start_background_sync()
 
-def start_background_sync():
-    global background_api
-    config = load_config()
-    if not config['api_token']: return
+def background_sync_logic():
+    """Maintains balance updates in the background using a persistent asyncio loop."""
+    print("Background sync thread started.")
 
-    from deriv_api import DerivAPI
-    async def sync_balance():
-        try:
-            api = DerivAPI(app_id=config['app_id'])
-            await api.authorize(config['api_token'])
-            # Subscribe to balance
-            sub = await api.subscribe({'balance': 1})
-            def on_balance(data):
-                if 'balance' in data:
-                    socketio.emit('status_update', {'balance': f"{data['balance']['balance']:.2f} {data['balance']['currency']}"})
-            sub.subscribe(on_balance)
-            while True: await asyncio.sleep(60)
-        except: pass
+    async def sync_main():
+        from deriv_api import DerivAPI
+        while True:
+            try:
+                config = load_config()
+                if config.get('api_token') and "YOUR" not in config['api_token']:
+                    api = DerivAPI(app_id=config.get('app_id', '62845'))
+                    try:
+                        await api.authorize(config['api_token'])
+                        res = await api.balance()
+                        if 'balance' in res:
+                            bal = res['balance']
+                            socketio.emit('status_update', {'balance': f"{bal['balance']:.2f} {bal['currency']}"})
+                    finally:
+                        await api.disconnect()
+                else:
+                    print("No valid API token for background sync.")
+            except Exception as e:
+                print(f"Background sync error: {e}")
 
-    def run_sync():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(sync_balance())
+            await asyncio.sleep(30)
 
-    if background_api:
-        # Note: In a production environment, you would properly signal the thread to stop.
-        # For this implementation, we'll allow a re-start to update settings.
-        pass
-
-    background_api = threading.Thread(target=run_sync, daemon=True)
-    background_api.start()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(sync_main())
+    finally:
+        loop.close()
 
 @socketio.on('toggle_bot')
 def handle_toggle_bot(data):
     global bot
     active = data.get('active', False)
+    print(f"Toggle bot: {active}")
 
     if active:
         config = load_config()
         if not config['api_token']:
             socketio.emit('notify', {'msg': 'Error: API Token Missing'})
+            socketio.emit('status_update', {'active': False})
             return
 
-        if bot and bot.is_running: return
+        if bot and bot.is_running:
+            print("Bot is already running.")
+            return
 
         bot = MultiplierBot(api_token=config['api_token'], socketio=socketio)
-        bot.stake = config['stake']
+        bot.stake = float(config['stake'])
         bot.stake_type = config['stake_type']
 
-        def run_bot():
+        def bot_worker():
+            print(f"Bot worker thread started with config: {config}")
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(bot.start())
+                # Use a proper async run method
+                coro = bot.start()
+                loop.run_until_complete(coro)
             except Exception as e:
-                print(f"Bot start error: {e}")
+                print(f"Bot execution error: {e}")
+                socketio.emit('notify', {'msg': f'Bot Error: {str(e)}'})
             finally:
+                print("Bot worker thread exiting.")
+                bot.is_running = False
+                socketio.emit('status_update', {'active': False})
                 loop.close()
 
-        threading.Thread(target=run_bot, daemon=True).start()
-        socketio.emit('status_update', {'active': True})
+        thread = threading.Thread(target=bot_worker, daemon=True)
+        thread.start()
+        # We don't emit status_update True here, let the bot do it after connecting
     else:
         if bot:
             bot.is_running = False
             socketio.emit('status_update', {'active': False})
+            socketio.emit('notify', {'msg': 'Bot Stop Requested'})
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)

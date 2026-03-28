@@ -15,11 +15,20 @@
             <p class="text-xs text-gray-500 mt-2 italic">* Generate this in your Deriv Account Settings under API Token.</p>
         </div>
 
-        <div>
-            <label class="block text-sm font-medium text-gray-300 mb-2">Trade Stake (USD)</label>
-            <input type="number" id="stake" value="{{ config.stake }}"
-                   class="w-full bg-[#0d1117] border border-[#30363d] rounded p-2 text-white focus:border-green-500 outline-none"
-                   placeholder="Enter stake amount (e.g. 10)">
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">Stake Type</label>
+                <select id="stake_type" class="w-full bg-[#0d1117] border border-[#30363d] rounded p-2 text-white outline-none">
+                    <option value="fixed" {% if config.stake_type == 'fixed' %}selected{% endif %}>Fixed (USD)</option>
+                    <option value="percent" {% if config.stake_type == 'percent' %}selected{% endif %}>% of Balance</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">Stake Value</label>
+                <input type="number" id="stake" value="{{ config.stake }}"
+                       class="w-full bg-[#0d1117] border border-[#30363d] rounded p-2 text-white focus:border-green-500 outline-none"
+                       placeholder="e.g. 10">
+            </div>
         </div>
 
         <div>
@@ -57,8 +66,9 @@
         const api_token = document.getElementById('api_token').value;
         const mode = document.querySelector('input[name="mode"]:checked').value;
         const stake = document.getElementById('stake').value;
+        const stake_type = document.getElementById('stake_type').value;
 
-        socket.emit('save_settings', { api_token, mode, stake });
+        socket.emit('save_settings', { api_token, mode, stake, stake_type });
     };
 </script>
 {% endblock %}

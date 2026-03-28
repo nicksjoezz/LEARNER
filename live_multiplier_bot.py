@@ -10,17 +10,19 @@ import ta
 from crash_boom_strategy import crash_boom_mtf_strategy
 
 # Strategy Parameters (Centralized)
+# TP and SL are now expressed as ROI percentages of the STAKE.
+# e.g., 150.0 means +150% profit. -20.0 means -20% loss.
 STRATEGY_CONFIG = {
     'BOOM500': {
         'multiplier': 300,
-        'tp_usd': 15.0,
-        'sl_usd': 2.0,
+        'tp_roi': 150.0, # 150% ROI
+        'sl_roi': -20.0, # -20% ROI
         'direction': 'buy'
     },
     'CRASH500': {
         'multiplier': 300,
-        'tp_usd': 10.0,
-        'sl_usd': 2.0,
+        'tp_roi': 100.0, # 100% ROI
+        'sl_roi': -20.0, # -20% ROI
         'direction': 'sell'
     }
 }
@@ -38,7 +40,8 @@ class MultiplierBot:
         self.last_15m_epoch = {}
         self.balance = 0.0
         self.currency = "USD"
-        self.stake = 10
+        self.stake = 10.0
+        self.stake_type = 'fixed' # 'fixed' or 'percent'
         self.log_buffer = []
         self.main_task = None
 
@@ -89,22 +92,44 @@ class MultiplierBot:
         self.log(f"History initialized for {symbol}")
 
     def calculate_strategy(self, symbol):
+        # Use the centralized logic from crash_boom_strategy
         df_with_signals = crash_boom_mtf_strategy(self.history_1m[symbol], self.history_15m[symbol], symbol)
+
+        # Check the signal on the last COMPLETED candle (index -2)
         last_signal = df_with_signals.iloc[-2]
+
         if STRATEGY_CONFIG[symbol]['direction'] == 'buy':
             return last_signal['buy']
-        return last_signal['sell']
+        else:
+            return last_signal['sell']
 
     async def place_trade(self, symbol):
         config = STRATEGY_CONFIG[symbol]
-        stake = self.stake
+
+        # Calculate actual stake
+        actual_stake = self.stake
+        if self.stake_type == 'percent':
+            actual_stake = round(self.balance * (self.stake / 100.0), 2)
+            if actual_stake < 1.0: actual_stake = 1.0 # Minimum reasonable multiplier stake
+
+        # Map ROI % to USD amount
+        # Profit/Loss = Stake * (ROI / 100)
+        tp_usd = round(actual_stake * (config['tp_roi'] / 100.0), 2)
+        sl_usd = round(abs(actual_stake * (config['sl_roi'] / 100.0)), 2)
+
+        # SL Safety Check: Cannot exceed stake
+        if sl_usd >= actual_stake:
+            sl_usd = round(actual_stake * 0.9, 2)
+
+        self.log(f"PLACING {symbol} {config['direction']} | Stake: ${actual_stake} | TP: ${tp_usd} | SL: ${sl_usd}")
+
         params = {
-            "buy": 1, "price": stake,
+            "buy": 1, "price": actual_stake,
             "parameters": {
-                "amount": stake, "basis": "stake",
+                "amount": actual_stake, "basis": "stake",
                 "contract_type": "MULTUP" if config['direction'] == 'buy' else "MULTDOWN",
                 "currency": self.currency, "multiplier": config['multiplier'], "symbol": symbol,
-                "limit_order": {"take_profit": config['tp_usd'], "stop_loss": config['sl_usd']}
+                "limit_order": {"take_profit": tp_usd, "stop_loss": sl_usd}
             }
         }
         try:
@@ -140,12 +165,15 @@ class MultiplierBot:
                         'ticks_history': symbol, 'end': 'latest', 'count': 5, 'granularity': 60, 'style': 'candles'
                     })
                     new_df = pd.DataFrame(res['candles'])
-                    # Persistence: Save to CSV as requested
-                    data_dir = 'market_data'
-                    os.makedirs(data_dir, exist_ok=True)
-                    new_df.to_csv(f"{data_dir}/{symbol}_1m_history.csv", mode='a', header=not os.path.exists(f"{data_dir}/{symbol}_1m_history.csv"), index=False)
-
+                    # Persistence: Save only the NEWEST closed candle to CSV
                     last_epoch = new_df.iloc[-1]['epoch']
+                    if last_epoch > self.last_1m_epoch.get(symbol, 0):
+                        data_dir = 'market_data'
+                        os.makedirs(data_dir, exist_ok=True)
+                        # Only save the last candle
+                        last_candle = new_df.tail(1)
+                        last_candle.to_csv(f"{data_dir}/{symbol}_1m_history.csv", mode='a', header=not os.path.exists(f"{data_dir}/{symbol}_1m_history.csv"), index=False)
+
                     if last_epoch > self.last_1m_epoch[symbol]:
                         self.log(f"[{symbol}] New candle closed.")
                         self.history_1m[symbol] = pd.concat([self.history_1m[symbol], new_df]).drop_duplicates('epoch').tail(500)

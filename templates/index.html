@@ -1,8 +1,8 @@
 {% extends "layout.html" %}
 {% block content %}
-<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 animate__animated animate__fadeInUp">
     <!-- Status Card -->
-    <div class="trading-card p-6 flex flex-col items-center justify-center">
+    <div class="trading-card p-6 flex flex-col items-center justify-center hover:scale-[1.02] transition-transform">
         <h3 class="text-gray-400 text-sm uppercase mb-2">Bot Status</h3>
         <div id="status-indicator" class="w-16 h-16 rounded-full flex items-center justify-center border-4 border-gray-600 mb-4">
             <i class="fas fa-power-off text-2xl"></i>
@@ -12,7 +12,7 @@
     </div>
 
     <!-- Balance Card -->
-    <div class="trading-card p-6">
+    <div class="trading-card p-6 hover:scale-[1.02] transition-transform">
         <h3 class="text-gray-400 text-sm uppercase mb-4">Account Balance</h3>
         <div class="flex items-baseline space-x-2">
             <span id="balance-val" class="text-4xl font-bold text-white">$0.00</span>
@@ -25,7 +25,7 @@
     </div>
 
     <!-- Strategy Info -->
-    <div class="trading-card p-6">
+    <div class="trading-card p-6 hover:scale-[1.02] transition-transform">
         <h3 class="text-gray-400 text-sm uppercase mb-4">Active Strategy</h3>
         <div class="space-y-4">
             <div class="flex justify-between items-center border-b border-[#30363d] pb-2">
@@ -45,7 +45,7 @@
 </div>
 
 <!-- Logs Section -->
-<div class="mt-8 trading-card">
+<div class="mt-8 trading-card animate__animated animate__fadeInUp animate__delay-1s">
     <div class="p-4 border-b border-[#30363d] flex justify-between items-center">
         <h3 class="text-gray-400 text-sm uppercase">Live Execution Logs</h3>
         <span class="text-xs text-green-500"><i class="fas fa-circle animate-pulse mr-1"></i> Real-time</span>
@@ -67,12 +67,20 @@
         e.preventDefault();
         console.log("Toggle clicked, currently:", botActive);
         botActive = !botActive;
-        window.socket.emit('toggle_bot', { active: botActive });
+        socket.emit('toggle_bot', { active: botActive });
     };
 
-    window.socket.on('status_update', (data) => {
+    socket.on('status_update', (data) => {
+        console.log("Status update received:", data);
         botActive = data.active;
-        if (botActive) {
+        const isInitializing = data.initializing;
+
+        if (isInitializing) {
+            toggleBtn.disabled = true;
+            toggleBtn.innerHTML = '<span class="loader"></span>INITIALIZING...';
+            statusText.innerText = 'Initializing...';
+        } else if (botActive) {
+            toggleBtn.disabled = false;
             toggleBtn.innerText = 'STOP TRADING';
             toggleBtn.classList.replace('btn-primary', 'btn-danger');
             statusText.innerText = 'Live Running';
@@ -80,6 +88,7 @@
             statusIndicator.classList.replace('border-gray-600', 'border-green-500');
             statusIndicator.classList.add('active-glow');
         } else {
+            toggleBtn.disabled = false;
             toggleBtn.innerText = 'START TRADING';
             toggleBtn.classList.replace('btn-danger', 'btn-primary');
             statusText.innerText = 'Inactive';
@@ -87,10 +96,15 @@
             statusIndicator.classList.replace('border-green-500', 'border-gray-600');
             statusIndicator.classList.remove('active-glow');
         }
-        if (data.balance) balanceVal.innerText = data.balance;
+        if (data.balance && balanceVal.innerText !== data.balance) {
+            balanceVal.innerText = data.balance;
+            balanceVal.classList.remove('balance-pulse');
+            void balanceVal.offsetWidth; // trigger reflow
+            balanceVal.classList.add('balance-pulse');
+        }
     });
 
-    window.socket.on('log_update', (data) => {
+    socket.on('log_update', (data) => {
         const div = document.createElement('div');
         div.className = data.msg.includes('SUCCESS') ? 'text-green-400' : (data.msg.includes('ERROR') ? 'text-red-400' : 'text-gray-300');
         div.innerText = data.msg;

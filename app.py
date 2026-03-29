@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO
 import json
@@ -62,37 +65,42 @@ def handle_save_settings(data):
     socketio.emit('notify', {'msg': 'Settings Saved Successfully'})
 
 def background_sync_logic():
-    """Maintains balance updates in the background using a persistent asyncio loop."""
+    """Maintains balance updates in the background using a separate thread-safe approach."""
     print("Background sync thread started.")
+    from deriv_api import DerivAPI
 
-    async def sync_main():
-        from deriv_api import DerivAPI
-        while True:
-            try:
-                config = load_config()
-                if config.get('api_token') and "YOUR" not in config['api_token']:
-                    api = DerivAPI(app_id=config.get('app_id', '62845'))
-                    try:
-                        await api.authorize(config['api_token'])
-                        res = await api.balance()
-                        if 'balance' in res:
-                            bal = res['balance']
-                            socketio.emit('status_update', {'balance': f"{bal['balance']:.2f} {bal['currency']}"})
-                    finally:
-                        await api.disconnect()
-                else:
-                    print("No valid API token for background sync.")
-            except Exception as e:
-                print(f"Background sync error: {e}")
+    async def get_balance(config):
+        api = DerivAPI(app_id=config['app_id'])
+        try:
+            await api.authorize(config['api_token'])
+            res = await api.balance()
+            if 'balance' in res:
+                bal = res['balance']
+                print(f"Balance updated: {bal['balance']}")
+                socketio.emit('status_update', {'balance': f"{bal['balance']:.2f} {bal['currency']}"})
+        except Exception as e:
+            print(f"Error in get_balance: {e}")
+        finally:
+            await api.disconnect()
 
-            await asyncio.sleep(30)
+    while True:
+        try:
+            config = load_config()
+            if config['api_token']:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(get_balance(config))
+                except Exception as inner_e:
+                    print(f"Loop error in background sync: {inner_e}")
+                finally:
+                    loop.close()
+            else:
+                print("No API token for background sync.")
+        except Exception as e:
+            print(f"Background sync error: {e}")
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(sync_main())
-    finally:
-        loop.close()
+        time.sleep(30)
 
 @socketio.on('toggle_bot')
 def handle_toggle_bot(data):
@@ -116,13 +124,11 @@ def handle_toggle_bot(data):
         bot.stake_type = config['stake_type']
 
         def bot_worker():
-            print(f"Bot worker thread started with config: {config}")
+            print("Bot worker thread started.")
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                # Use a proper async run method
-                coro = bot.start()
-                loop.run_until_complete(coro)
+                loop.run_until_complete(bot.start())
             except Exception as e:
                 print(f"Bot execution error: {e}")
                 socketio.emit('notify', {'msg': f'Bot Error: {str(e)}'})

@@ -7,18 +7,37 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
     <style>
-        body { background-color: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+        body { background-color: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; overflow-x: hidden; }
         .trading-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
         .btn-primary { background-color: #238636; transition: 0.2s; }
         .btn-primary:hover { background-color: #2ea043; }
         .btn-danger { background-color: #da3633; transition: 0.2s; }
         .btn-danger:hover { background-color: #f85149; }
         .active-glow { box-shadow: 0 0 15px rgba(35, 134, 54, 0.4); }
+        .balance-pulse { animation: pulse-green 1s; }
+        @keyframes pulse-green {
+            0% { color: #fff; }
+            50% { color: #2ea043; transform: scale(1.05); }
+            100% { color: #fff; }
+        }
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #238636;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
-    <script>
-        window.socket = io();
-    </script>
 </head>
 <body class="min-h-screen">
     <nav class="border-b border-[#30363d] p-4 bg-[#161b22]">
@@ -47,10 +66,11 @@
     </div>
 
     <script>
+        const socket = io();
         const toast = document.getElementById('toast');
         const toastMsg = document.getElementById('toast-msg');
 
-        window.socket.on('notify', (data) => {
+        socket.on('notify', (data) => {
             toastMsg.innerText = data.msg;
             toast.classList.remove('hidden', 'translate-y-10');
             setTimeout(() => {

@@ -1,6 +1,3 @@
-import eventlet
-eventlet.monkey_patch()
-
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO
 import json
@@ -11,7 +8,7 @@ import time
 from live_multiplier_bot import MultiplierBot
 
 app = Flask(__name__)
-# Use threading as it's generally more stable with asyncio in this context
+# Using threading mode to avoid eventlet/gevent conflicts with asyncio
 socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*")
 
 CONFIG_FILE = 'config.json'
@@ -47,7 +44,6 @@ def settings():
 @socketio.on('connect')
 def handle_connect():
     global background_sync_started
-    print("Client connected")
     if not background_sync_started:
         thread = threading.Thread(target=background_sync_logic, daemon=True)
         thread.start()
@@ -55,7 +51,6 @@ def handle_connect():
 
 @socketio.on('save_settings')
 def handle_save_settings(data):
-    print(f"Saving settings: {data}")
     config = load_config()
     config['api_token'] = data.get('api_token', config['api_token'])
     config['mode'] = data.get('mode', config['mode'])
@@ -65,8 +60,7 @@ def handle_save_settings(data):
     socketio.emit('notify', {'msg': 'Settings Saved Successfully'})
 
 def background_sync_logic():
-    """Maintains balance updates in the background using a separate thread-safe approach."""
-    print("Background sync thread started.")
+    """Maintains balance updates in the background thread."""
     from deriv_api import DerivAPI
 
     async def get_balance(config):
@@ -76,10 +70,9 @@ def background_sync_logic():
             res = await api.balance()
             if 'balance' in res:
                 bal = res['balance']
-                print(f"Balance updated: {bal['balance']}")
                 socketio.emit('status_update', {'balance': f"{bal['balance']:.2f} {bal['currency']}"})
         except Exception as e:
-            print(f"Error in get_balance: {e}")
+            print(f"Sync balance error: {e}")
         finally:
             await api.disconnect()
 
@@ -91,22 +84,16 @@ def background_sync_logic():
                 asyncio.set_event_loop(loop)
                 try:
                     loop.run_until_complete(get_balance(config))
-                except Exception as inner_e:
-                    print(f"Loop error in background sync: {inner_e}")
                 finally:
                     loop.close()
-            else:
-                print("No API token for background sync.")
         except Exception as e:
-            print(f"Background sync error: {e}")
-
+            print(f"Background sync outer error: {e}")
         time.sleep(30)
 
 @socketio.on('toggle_bot')
 def handle_toggle_bot(data):
     global bot
     active = data.get('active', False)
-    print(f"Toggle bot: {active}")
 
     if active:
         config = load_config()
@@ -116,7 +103,6 @@ def handle_toggle_bot(data):
             return
 
         if bot and bot.is_running:
-            print("Bot is already running.")
             return
 
         bot = MultiplierBot(api_token=config['api_token'], socketio=socketio)
@@ -124,23 +110,20 @@ def handle_toggle_bot(data):
         bot.stake_type = config['stake_type']
 
         def bot_worker():
-            print("Bot worker thread started.")
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(bot.start())
             except Exception as e:
-                print(f"Bot execution error: {e}")
+                print(f"Bot worker error: {e}")
                 socketio.emit('notify', {'msg': f'Bot Error: {str(e)}'})
             finally:
-                print("Bot worker thread exiting.")
                 bot.is_running = False
                 socketio.emit('status_update', {'active': False})
                 loop.close()
 
         thread = threading.Thread(target=bot_worker, daemon=True)
         thread.start()
-        # We don't emit status_update True here, let the bot do it after connecting
     else:
         if bot:
             bot.is_running = False
@@ -148,4 +131,5 @@ def handle_toggle_bot(data):
             socketio.emit('notify', {'msg': 'Bot Stop Requested'})
 
 if __name__ == '__main__':
+    # allow_unsafe_werkzeug required for SocketIO threading mode on dev server
     socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)

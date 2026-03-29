@@ -7,5 +7,5 @@
     "fetch_days": 365,
     "mode": "demo",
     "stake": 1.0,
-    "stake_type": "percent"
+    "stake_type": "fixed"
 }

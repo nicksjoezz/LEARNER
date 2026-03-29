@@ -66,14 +66,28 @@
     toggleBtn.onclick = (e) => {
         e.preventDefault();
         console.log("Toggle clicked, currently:", botActive);
+
+        // Provide immediate visual feedback
+        toggleBtn.disabled = true;
+        if (!botActive) {
+            toggleBtn.innerHTML = '<span class="loader"></span>STARTING...';
+        } else {
+            toggleBtn.innerHTML = '<span class="loader"></span>STOPPING...';
+        }
+
         botActive = !botActive;
         socket.emit('toggle_bot', { active: botActive });
     };
 
     socket.on('status_update', (data) => {
         console.log("Status update received:", data);
-        botActive = data.active;
+        if (data.active !== undefined) botActive = data.active;
         const isInitializing = data.initializing;
+
+        // Re-enable button on any update if we're not starting/stopping
+        if (!isInitializing) {
+            toggleBtn.disabled = false;
+        }
 
         if (isInitializing) {
             toggleBtn.disabled = true;

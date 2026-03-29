@@ -79,10 +79,10 @@ class MultiplierBot:
     def calculate_strategy(self, symbol):
         df_with_signals = crash_boom_mtf_strategy(self.history_1m[symbol], self.history_15m[symbol], symbol)
         last_signal = df_with_signals.iloc[-2]
-        if STRATEGY_CONFIG[symbol]['direction'] == 'buy':
-            return last_signal['buy']
-        else:
-            return last_signal['sell']
+        return {
+            'buy': last_signal.get('buy', False),
+            'sell': last_signal.get('sell', False)
+        }
 
     async def start(self):
         self.is_initializing = True
@@ -120,9 +120,8 @@ class MultiplierBot:
                 self.log(f"[{symbol}] Initial history loaded. Checking for immediate signals...")
 
                 # Immediate check
-                if self.calculate_strategy(symbol):
-                    self.log(f"[{symbol}] IMMEDIATE SIGNAL detected!")
-                    await self.place_trade_isolated(symbol, symbol_api)
+                signals = self.calculate_strategy(symbol)
+                await self.process_signals(symbol, signals, symbol_api)
 
                 # Subscription
                 subscription = await symbol_api.subscribe({'ticks_history': symbol, 'end': 'latest', 'subscribe': 1, 'granularity': 60, 'style': 'candles', 'count': 1})
@@ -150,9 +149,8 @@ class MultiplierBot:
                                     for col in ['open', 'high', 'low', 'close', 'epoch']: df_15_new[col] = pd.to_numeric(df_15_new[col])
                                     self.history_15m[symbol] = pd.concat([self.history_15m[symbol], df_15_new]).drop_duplicates('epoch').tail(100)
 
-                            if self.calculate_strategy(symbol):
-                                self.log(f"[{symbol}] SIGNAL detected!")
-                                await self.place_trade_isolated(symbol, symbol_api)
+                            signals = self.calculate_strategy(symbol)
+                            await self.process_signals(symbol, signals, symbol_api)
 
                 await symbol_api.disconnect()
 
@@ -173,9 +171,43 @@ class MultiplierBot:
         while self.is_running:
             await asyncio.sleep(5)
 
+    async def process_signals(self, symbol, signals, api):
+        target_direction = STRATEGY_CONFIG[symbol]['direction']
+        entry_signal = signals['buy'] if target_direction == 'buy' else signals['sell']
+        opposite_signal = signals['sell'] if target_direction == 'buy' else signals['buy']
+
+        # 1. Close if opposite signal
+        if opposite_signal and symbol in self.active_positions:
+            self.log(f"[{symbol}] OPPOSITE SIGNAL detected! Closing existing position.")
+            await self.close_position(symbol, api)
+
+        # 2. Open if entry signal and no position
+        if entry_signal and symbol not in self.active_positions:
+            self.log(f"[{symbol}] ENTRY SIGNAL detected!")
+            await self.place_trade_isolated(symbol, api)
+
+    async def close_position(self, symbol, api):
+        if symbol not in self.active_positions: return
+
+        contract_id = self.active_positions.get(symbol)
+        if not contract_id: return
+
+        try:
+            res = await api.sell({"sell": contract_id, "price": 0})
+            if 'sell' in res:
+                self.log(f"SUCCESS: {symbol} closed manually on opposite signal.")
+                if symbol in self.active_positions: del self.active_positions[symbol]
+            else:
+                err_msg = res.get('error', {}).get('message', 'Unknown error')
+                self.log(f"ERROR closing {symbol}: {err_msg}", "error")
+                if "invalid contract" in err_msg.lower() or "not found" in err_msg.lower():
+                    # If contract is already gone, clean up
+                    if symbol in self.active_positions: del self.active_positions[symbol]
+        except Exception as e:
+            self.log(f"Close error {symbol}: {e}", "error")
+
     async def place_trade_isolated(self, symbol, api):
         if symbol in self.active_positions:
-            self.log(f"Skipping {symbol} - already have an active position.")
             return
 
         config = STRATEGY_CONFIG[symbol]

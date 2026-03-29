@@ -84,11 +84,13 @@ def background_sync_logic():
                 asyncio.set_event_loop(loop)
                 try:
                     loop.run_until_complete(get_balance(config))
+                except Exception as e:
+                    print(f"Background sync loop error: {e}")
                 finally:
                     loop.close()
         except Exception as e:
             print(f"Background sync outer error: {e}")
-        time.sleep(30)
+        time.sleep(10) # More frequent sync
 
 @socketio.on('toggle_bot')
 def handle_toggle_bot(data):

@@ -38,14 +38,20 @@ def crash_boom_mtf_strategy(df_1m, df_15m, symbol):
     df_1m['sell'] = False
 
     if 'BOOM' in symbol:
-        # Optimized Boom Multiplier Strategy (from 120k candle analysis)
+        # Optimized Boom Multiplier Strategy
         # Entry: 15m Trend Bullish + 1m RSI < 20 (Extreme Pullback)
         df_1m.loc[(df_1m['15m_trend_up'] == True) &
                   (df_1m['rsi'] < 20), 'buy'] = True
+        # Opposite: Trend turns bearish OR RSI overbought
+        df_1m.loc[(df_1m['15m_trend_up'] == False) |
+                  (df_1m['rsi'] > 80), 'sell'] = True
     else:
-        # Optimized Crash Multiplier Strategy (from 100k candle analysis)
+        # Optimized Crash Multiplier Strategy
         # Entry: 15m Trend Bearish + 1m RSI > 60 (Healthy Pullback)
         df_1m.loc[(df_1m['15m_trend_up'] == False) &
                   (df_1m['rsi'] > 60), 'sell'] = True
+        # Opposite: Trend turns bullish OR RSI oversold
+        df_1m.loc[(df_1m['15m_trend_up'] == True) |
+                  (df_1m['rsi'] < 20), 'buy'] = True
 
     return df_1m

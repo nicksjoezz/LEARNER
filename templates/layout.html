@@ -6,6 +6,11 @@
     <title>AlgoRun Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        window.socket = io({
+            transports: ['polling']
+        });
+    </script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
     <style>
@@ -66,11 +71,10 @@
     </div>
 
     <script>
-        const socket = io();
         const toast = document.getElementById('toast');
         const toastMsg = document.getElementById('toast-msg');
 
-        socket.on('notify', (data) => {
+        window.socket.on('notify', (data) => {
             toastMsg.innerText = data.msg;
             toast.classList.remove('hidden', 'translate-y-10');
             setTimeout(() => {

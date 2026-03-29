@@ -80,7 +80,10 @@
 
     window.socket.on('status_update', (data) => {
         console.log("Status update received:", data);
-        if (data.active !== undefined) botActive = data.active;
+        if (data.active !== undefined) {
+            botActive = data.active;
+            console.log("botActive updated to:", botActive);
+        }
         const isInitializing = data.initializing;
 
         // Re-enable button on any update if we're not starting/stopping

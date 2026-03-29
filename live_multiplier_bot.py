@@ -53,12 +53,12 @@ class MultiplierBot:
         else: self.logger.error(full_msg)
 
         if self.socketio:
-            self.socketio.emit('log_update', {'msg': full_msg})
+            self.socketio.emit('log_update', {'msg': full_msg}, namespace='/')
 
     async def connect(self):
         try:
             self.api = DerivAPI(app_id=self.app_id)
-            auth = await self.api.authorize(self.api_token)
+            auth = await asyncio.wait_for(self.api.authorize(self.api_token), timeout=15)
             self.balance = float(auth['authorize']['balance'])
             self.currency = auth['authorize']['currency']
             self.log(f"Connected! Balance: {self.balance} {self.currency}")
@@ -74,7 +74,7 @@ class MultiplierBot:
                 'active': self.is_running,
                 'initializing': self.is_initializing,
                 'balance': f"{self.balance:.2f} {self.currency}"
-            })
+            }, namespace='/')
 
     def calculate_strategy(self, symbol):
         df_with_signals = crash_boom_mtf_strategy(self.history_1m[symbol], self.history_15m[symbol], symbol)
@@ -87,90 +87,23 @@ class MultiplierBot:
     async def start(self):
         self.is_initializing = True
         self.update_status()
+        os.makedirs('market_data', exist_ok=True)
 
         try:
-            if not await self.connect():
-                return
-
-            self.is_running = True
-            symbols = ['BOOM500', 'CRASH500']
-
-            def symbol_worker(symbol):
-                self.log(f"Worker thread for {symbol} starting...")
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-                async def run_symbol():
-                    symbol_api = DerivAPI(app_id=self.app_id)
-                    await symbol_api.authorize(self.api_token)
-
-                    # Immediate history fetch
-                    res_1m = await symbol_api.ticks_history({'ticks_history': symbol, 'end': 'latest', 'count': 500, 'granularity': 60, 'style': 'candles'})
-                    df_1m = pd.DataFrame(res_1m['candles'])
-                    for col in ['open', 'high', 'low', 'close', 'epoch']: df_1m[col] = pd.to_numeric(df_1m[col])
-                    self.history_1m[symbol] = df_1m
-
-                    res_15m = await symbol_api.ticks_history({'ticks_history': symbol, 'end': 'latest', 'count': 100, 'granularity': 900, 'style': 'candles'})
-                    df_15m = pd.DataFrame(res_15m['candles'])
-                    for col in ['open', 'high', 'low', 'close', 'epoch']: df_15m[col] = pd.to_numeric(df_15m[col])
-                    self.history_15m[symbol] = df_15m
-
-                    self.last_1m_epoch[symbol] = int(df_1m.iloc[-1]['epoch'])
-                    self.log(f"[{symbol}] Initial history loaded. Checking for immediate signals...")
-
-                    # Immediate check
-                    signals = self.calculate_strategy(symbol)
-                    await self.process_signals(symbol, signals, symbol_api)
-
-                    # Subscription
-                    subscription = await symbol_api.subscribe({'ticks_history': symbol, 'end': 'latest', 'subscribe': 1, 'granularity': 60, 'style': 'candles', 'count': 1})
-                    queue = asyncio.Queue()
-                    subscription_obj = subscription.subscribe(on_next=lambda m: loop.call_soon_threadsafe(queue.put_nowait, m))
-
-                    try:
-                        while self.is_running:
-                            try:
-                                msg = await asyncio.wait_for(queue.get(), timeout=1.0)
-                                if 'ohlc' in msg:
-                                    candle = msg['ohlc']
-                                    candle_start = int(candle['epoch'])
-                                    if (candle_start // 60) > (self.last_1m_epoch[symbol] // 60):
-                                        self.log(f"[{symbol}] Minute rollover detected. Recalculating...")
-                                        new_row = {'epoch': float(candle_start), 'open': float(candle['open']), 'high': float(candle['high']), 'low': float(candle['low']), 'close': float(candle['close'])}
-                                        self.history_1m[symbol] = pd.concat([self.history_1m[symbol], pd.DataFrame([new_row])]).drop_duplicates('epoch').tail(500)
-                                        self.last_1m_epoch[symbol] = candle_start
-
-                                        # Persistence
-                                        os.makedirs('market_data', exist_ok=True)
-                                        pd.DataFrame([new_row]).to_csv(f"market_data/{symbol}_1m_history.csv", mode='a', header=not os.path.exists(f"market_data/{symbol}_1m_history.csv"), index=False)
-
-                                        if candle_start % 900 == 0:
-                                            res_15 = await symbol_api.ticks_history({'ticks_history': symbol, 'end': 'latest', 'count': 1, 'granularity': 900, 'style': 'candles'})
-                                            if 'candles' in res_15:
-                                                df_15_new = pd.DataFrame(res_15['candles'])
-                                                for col in ['open', 'high', 'low', 'close', 'epoch']: df_15_new[col] = pd.to_numeric(df_15_new[col])
-                                                self.history_15m[symbol] = pd.concat([self.history_15m[symbol], df_15_new]).drop_duplicates('epoch').tail(100)
-
-                                        signals = self.calculate_strategy(symbol)
-                                        await self.process_signals(symbol, signals, symbol_api)
-                            except asyncio.TimeoutError:
-                                continue
-                    finally:
-                        subscription_obj.dispose()
-                        await symbol_api.disconnect()
-
-                try:
-                    loop.run_until_complete(run_symbol())
-                except Exception as e:
-                    self.log(f"Worker for {symbol} error: {e}", "error")
-                finally:
-                    loop.close()
-
-            for s in symbols:
-                threading.Thread(target=symbol_worker, args=(s,), daemon=True).start()
+            while self.is_initializing:
+                if await self.connect():
+                    break
+                self.log("Retrying connection in 10 seconds...")
+                await asyncio.sleep(10)
 
             self.is_initializing = False
+            self.is_running = True
             self.update_status()
+
+            symbols = ['BOOM500', 'CRASH500']
+            for s in symbols:
+                threading.Thread(target=self.symbol_worker_thread, args=(s,), daemon=True).start()
+
             self.log("All symbol workers active.")
 
             while self.is_running:
@@ -181,6 +114,81 @@ class MultiplierBot:
             self.is_initializing = False
             self.is_running = False
             self.update_status()
+
+    def symbol_worker_thread(self, symbol):
+        self.log(f"Worker thread for {symbol} starting...")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        while self.is_running:
+            try:
+                loop.run_until_complete(self.run_symbol(symbol))
+            except Exception as e:
+                self.log(f"Worker for {symbol} crashed: {e}. Restarting in 10s...", "error")
+                time.sleep(10)
+
+        loop.close()
+
+    async def run_symbol(self, symbol):
+        symbol_api = DerivAPI(app_id=self.app_id)
+        await asyncio.wait_for(symbol_api.authorize(self.api_token), timeout=15)
+
+        # Immediate history fetch
+        res_1m = await asyncio.wait_for(symbol_api.ticks_history({'ticks_history': symbol, 'end': 'latest', 'count': 500, 'granularity': 60, 'style': 'candles'}), timeout=20)
+        df_1m = pd.DataFrame(res_1m['candles'])
+        for col in ['open', 'high', 'low', 'close', 'epoch']: df_1m[col] = pd.to_numeric(df_1m[col])
+        self.history_1m[symbol] = df_1m
+
+        res_15m = await asyncio.wait_for(symbol_api.ticks_history({'ticks_history': symbol, 'end': 'latest', 'count': 100, 'granularity': 900, 'style': 'candles'}), timeout=20)
+        df_15m = pd.DataFrame(res_15m['candles'])
+        for col in ['open', 'high', 'low', 'close', 'epoch']: df_15m[col] = pd.to_numeric(df_15m[col])
+        self.history_15m[symbol] = df_15m
+
+        self.last_1m_epoch[symbol] = int(df_1m.iloc[-1]['epoch'])
+        self.log(f"[{symbol}] Initial history loaded. Checking for immediate signals...")
+
+        # Immediate check
+        signals = self.calculate_strategy(symbol)
+        await self.process_signals(symbol, signals, symbol_api)
+
+        # Subscription
+        subscription = await symbol_api.subscribe({'ticks_history': symbol, 'end': 'latest', 'subscribe': 1, 'granularity': 60, 'style': 'candles', 'count': 1})
+        queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        subscription_obj = subscription.subscribe(on_next=lambda m: loop.call_soon_threadsafe(queue.put_nowait, m))
+
+        try:
+            while self.is_running:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    if 'ohlc' in msg:
+                        candle = msg['ohlc']
+                        candle_start = int(candle['epoch'])
+                        if (candle_start // 60) > (self.last_1m_epoch[symbol] // 60):
+                            self.log(f"[{symbol}] Minute rollover detected. Recalculating...")
+                            new_row = {'epoch': float(candle_start), 'open': float(candle['open']), 'high': float(candle['high']), 'low': float(candle['low']), 'close': float(candle['close'])}
+                            self.history_1m[symbol] = pd.concat([self.history_1m[symbol], pd.DataFrame([new_row])]).drop_duplicates('epoch').tail(500)
+                            self.last_1m_epoch[symbol] = candle_start
+
+                            # Persistence
+                            pd.DataFrame([new_row]).to_csv(f"market_data/{symbol}_1m_history.csv", mode='a', header=not os.path.exists(f"market_data/{symbol}_1m_history.csv"), index=False)
+
+                            if candle_start % 900 == 0:
+                                res_15 = await symbol_api.ticks_history({'ticks_history': symbol, 'end': 'latest', 'count': 1, 'granularity': 900, 'style': 'candles'})
+                                if 'candles' in res_15:
+                                    df_15_new = pd.DataFrame(res_15['candles'])
+                                    for col in ['open', 'high', 'low', 'close', 'epoch']: df_15_new[col] = pd.to_numeric(df_15_new[col])
+                                    self.history_15m[symbol] = pd.concat([self.history_15m[symbol], df_15_new]).drop_duplicates('epoch').tail(100)
+
+                            signals = self.calculate_strategy(symbol)
+                            await self.process_signals(symbol, signals, symbol_api)
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            subscription_obj.dispose()
+            try:
+                await asyncio.wait_for(symbol_api.disconnect(), timeout=5)
+            except: pass
 
     async def process_signals(self, symbol, signals, api):
         target_direction = STRATEGY_CONFIG[symbol]['direction']
@@ -291,6 +299,8 @@ class MultiplierBot:
         self.is_running = False
         await asyncio.sleep(1)
         if self.api:
-            await self.api.disconnect()
+            try:
+                await asyncio.wait_for(self.api.disconnect(), timeout=5)
+            except: pass
         self.log("Bot stopped.")
         self.update_status()

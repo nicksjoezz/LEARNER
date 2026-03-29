@@ -50,8 +50,17 @@ def settings():
 
 @socketio.on('connect')
 def handle_connect():
-    global background_sync_started
+    global background_sync_started, bot
     logger.info(f"Socket connected: {request.sid}")
+
+    # Send current bot status immediately to the new client
+    status = {
+        'active': bot.is_running if bot else False,
+        'initializing': bot.is_initializing if bot else False,
+        'balance': f"{bot.balance:.2f} {bot.currency}" if bot and bot.balance else "0.00 USD"
+    }
+    logger.info(f"Sending initial status to {request.sid}: {status}")
+    socketio.emit('status_update', status, room=request.sid)
 
     # Always trigger an immediate balance check on connect
     config = load_config()
@@ -65,17 +74,8 @@ def handle_connect():
         thread.start()
         background_sync_started = True
 
-@socketio.on('save_settings')
-def handle_save_settings(data):
-    config = load_config()
-    config['api_token'] = data.get('api_token', config['api_token'])
-    config['mode'] = data.get('mode', config['mode'])
-    config['stake'] = float(data.get('stake', 10))
-    config['stake_type'] = data.get('stake_type', 'fixed')
-    save_config(config)
-    socketio.emit('notify', {'msg': 'Settings Saved Successfully'})
-
 def immediate_balance_sync(config):
+    global bot
     from deriv_api import DerivAPI
     async def get_balance():
         api = DerivAPI(app_id=config['app_id'])
@@ -84,8 +84,20 @@ def immediate_balance_sync(config):
             res = await asyncio.wait_for(api.balance(), timeout=10)
             if 'balance' in res:
                 bal = res['balance']
-                logger.info(f"Immediate sync balance: {bal['balance']}")
-                socketio.emit('status_update', {'balance': f"{bal['balance']:.2f} {bal['currency']}"})
+                bal_val = float(bal['balance'])
+                bal_curr = bal['currency']
+                bal_str = f"{bal_val:.2f} {bal_curr}"
+
+                if bot:
+                    bot.balance = bal_val
+                    bot.currency = bal_curr
+
+                status = {
+                    'balance': bal_str,
+                    'active': bot.is_running if bot else False,
+                    'initializing': bot.is_initializing if bot else False
+                }
+                socketio.emit('status_update', status, namespace='/')
         except Exception as e:
             logger.error(f"Immediate balance sync error: {e}")
         finally:
@@ -102,6 +114,7 @@ def immediate_balance_sync(config):
 
 def background_sync_logic():
     """Maintains balance updates in the background thread."""
+    global bot
     from deriv_api import DerivAPI
 
     async def get_balance(config):
@@ -111,8 +124,20 @@ def background_sync_logic():
             res = await asyncio.wait_for(api.balance(), timeout=10)
             if 'balance' in res:
                 bal = res['balance']
-                logger.info(f"Background sync balance: {bal['balance']}")
-                socketio.emit('status_update', {'balance': f"{bal['balance']:.2f} {bal['currency']}"})
+                bal_val = float(bal['balance'])
+                bal_curr = bal['currency']
+                bal_str = f"{bal_val:.2f} {bal_curr}"
+
+                if bot:
+                    bot.balance = bal_val
+                    bot.currency = bal_curr
+
+                status = {
+                    'balance': bal_str,
+                    'active': bot.is_running if bot else False,
+                    'initializing': bot.is_initializing if bot else False
+                }
+                socketio.emit('status_update', status, namespace='/')
         except Exception as e:
             logger.error(f"Background sync error: {e}")
         finally:
@@ -145,15 +170,17 @@ def handle_toggle_bot(data):
     if active:
         config = load_config()
         if not config['api_token']:
-            socketio.emit('notify', {'msg': 'Error: API Token Missing'})
-            socketio.emit('status_update', {'active': False, 'initializing': False})
+            socketio.emit('notify', {'msg': 'Error: API Token Missing'}, namespace='/')
+            socketio.emit('status_update', {'active': False, 'initializing': False}, namespace='/')
             return
 
-        if bot and bot.is_running:
-            logger.info("Bot already running")
+        if bot and (bot.is_running or bot.is_initializing):
+            logger.info("Bot already running or initializing")
             return
 
-        bot = MultiplierBot(api_token=config['api_token'], socketio=socketio)
+        if not bot:
+            bot = MultiplierBot(api_token=config['api_token'], socketio=socketio)
+
         bot.stake = float(config['stake'])
         bot.stake_type = config['stake_type']
 
@@ -164,20 +191,26 @@ def handle_toggle_bot(data):
             try:
                 loop.run_until_complete(bot.start())
             except Exception as e:
-                logger.error(f"Bot worker error: {e}")
-                socketio.emit('notify', {'msg': f'Bot Error: {str(e)}'})
+                logger.error(f"Bot worker thread fatal error: {e}")
+                try:
+                    socketio.emit('notify', {'msg': f'Bot Fatal Error: {str(e)}'}, namespace='/')
+                except: pass
             finally:
                 logger.info("Bot worker thread finishing")
                 bot.is_running = False
-                socketio.emit('status_update', {'active': False, 'initializing': False})
+                bot.is_initializing = False
+                try:
+                    socketio.emit('status_update', {'active': False, 'initializing': False}, namespace='/')
+                except: pass
                 loop.close()
 
         thread = threading.Thread(target=bot_worker, daemon=True)
         thread.start()
     else:
         if bot:
-            logger.info("Stopping bot")
+            logger.info("Stopping bot requested")
             bot.is_running = False
+            bot.is_initializing = False
             socketio.emit('notify', {'msg': 'Bot Stop Requested'})
 
 if __name__ == '__main__':

@@ -66,15 +66,17 @@ def background_sync_logic():
     async def get_balance(config):
         api = DerivAPI(app_id=config['app_id'])
         try:
-            await api.authorize(config['api_token'])
-            res = await api.balance()
+            await asyncio.wait_for(api.authorize(config['api_token']), timeout=10)
+            res = await asyncio.wait_for(api.balance(), timeout=10)
             if 'balance' in res:
                 bal = res['balance']
                 socketio.emit('status_update', {'balance': f"{bal['balance']:.2f} {bal['currency']}"})
         except Exception as e:
             print(f"Sync balance error: {e}")
         finally:
-            await api.disconnect()
+            try:
+                await asyncio.wait_for(api.disconnect(), timeout=5)
+            except: pass
 
     while True:
         try:

@@ -126,33 +126,39 @@ class MultiplierBot:
                 # Subscription
                 subscription = await symbol_api.subscribe({'ticks_history': symbol, 'end': 'latest', 'subscribe': 1, 'granularity': 60, 'style': 'candles', 'count': 1})
                 queue = asyncio.Queue()
-                subscription.subscribe(on_next=lambda m: loop.call_soon_threadsafe(queue.put_nowait, m))
+                subscription_obj = subscription.subscribe(on_next=lambda m: loop.call_soon_threadsafe(queue.put_nowait, m))
 
-                while self.is_running:
-                    msg = await queue.get()
-                    if 'ohlc' in msg:
-                        candle = msg['ohlc']
-                        candle_start = int(candle['epoch'])
-                        if (candle_start // 60) > (self.last_1m_epoch[symbol] // 60):
-                            self.log(f"[{symbol}] Minute rollover detected. Recalculating...")
-                            new_row = {'epoch': float(candle_start), 'open': float(candle['open']), 'high': float(candle['high']), 'low': float(candle['low']), 'close': float(candle['close'])}
-                            self.history_1m[symbol] = pd.concat([self.history_1m[symbol], pd.DataFrame([new_row])]).drop_duplicates('epoch').tail(500)
-                            self.last_1m_epoch[symbol] = candle_start
+                try:
+                    while self.is_running:
+                        try:
+                            msg = await asyncio.wait_for(queue.get(), timeout=1.0)
+                            if 'ohlc' in msg:
+                                candle = msg['ohlc']
+                                candle_start = int(candle['epoch'])
+                                if (candle_start // 60) > (self.last_1m_epoch[symbol] // 60):
+                                    self.log(f"[{symbol}] Minute rollover detected. Recalculating...")
+                                    new_row = {'epoch': float(candle_start), 'open': float(candle['open']), 'high': float(candle['high']), 'low': float(candle['low']), 'close': float(candle['close'])}
+                                    self.history_1m[symbol] = pd.concat([self.history_1m[symbol], pd.DataFrame([new_row])]).drop_duplicates('epoch').tail(500)
+                                    self.last_1m_epoch[symbol] = candle_start
 
-                            # Persistence
-                            pd.DataFrame([new_row]).to_csv(f"market_data/{symbol}_1m_history.csv", mode='a', header=not os.path.exists(f"market_data/{symbol}_1m_history.csv"), index=False)
+                                    # Persistence
+                                    os.makedirs('market_data', exist_ok=True)
+                                    pd.DataFrame([new_row]).to_csv(f"market_data/{symbol}_1m_history.csv", mode='a', header=not os.path.exists(f"market_data/{symbol}_1m_history.csv"), index=False)
 
-                            if candle_start % 900 == 0:
-                                res_15 = await symbol_api.ticks_history({'ticks_history': symbol, 'end': 'latest', 'count': 1, 'granularity': 900, 'style': 'candles'})
-                                if 'candles' in res_15:
-                                    df_15_new = pd.DataFrame(res_15['candles'])
-                                    for col in ['open', 'high', 'low', 'close', 'epoch']: df_15_new[col] = pd.to_numeric(df_15_new[col])
-                                    self.history_15m[symbol] = pd.concat([self.history_15m[symbol], df_15_new]).drop_duplicates('epoch').tail(100)
+                                    if candle_start % 900 == 0:
+                                        res_15 = await symbol_api.ticks_history({'ticks_history': symbol, 'end': 'latest', 'count': 1, 'granularity': 900, 'style': 'candles'})
+                                        if 'candles' in res_15:
+                                            df_15_new = pd.DataFrame(res_15['candles'])
+                                            for col in ['open', 'high', 'low', 'close', 'epoch']: df_15_new[col] = pd.to_numeric(df_15_new[col])
+                                            self.history_15m[symbol] = pd.concat([self.history_15m[symbol], df_15_new]).drop_duplicates('epoch').tail(100)
 
-                            signals = self.calculate_strategy(symbol)
-                            await self.process_signals(symbol, signals, symbol_api)
-
-                await symbol_api.disconnect()
+                                    signals = self.calculate_strategy(symbol)
+                                    await self.process_signals(symbol, signals, symbol_api)
+                        except asyncio.TimeoutError:
+                            continue
+                finally:
+                    subscription_obj.dispose()
+                    await symbol_api.disconnect()
 
             try:
                 loop.run_until_complete(run_symbol())
@@ -247,23 +253,31 @@ class MultiplierBot:
         try:
             sub = await api.subscribe({"proposal_open_contract": 1, "contract_id": contract_id})
             queue = asyncio.Queue()
-            loop = asyncio.get_event_loop()
-            sub.subscribe(on_next=lambda m: loop.call_soon_threadsafe(queue.put_nowait, m))
+            loop = asyncio.get_running_loop()
 
-            while self.is_running:
-                msg = await queue.get()
-                if 'proposal_open_contract' in msg:
-                    contract = msg['proposal_open_contract']
-                    if contract.get('is_expired') or contract.get('status') != 'open':
-                        profit = contract.get('profit', 0)
-                        self.log(f"CLOSED {symbol} | Profit: ${profit}")
-                        if symbol in self.active_positions: del self.active_positions[symbol]
+            # Use an explicit subscription object to allow proper cleanup
+            subscription_obj = sub.subscribe(on_next=lambda m: loop.call_soon_threadsafe(queue.put_nowait, m))
 
-                        bal_res = await api.balance()
-                        if 'balance' in bal_res:
-                            self.balance = float(bal_res['balance']['balance'])
-                            self.update_status()
-                        break
+            try:
+                while self.is_running:
+                    try:
+                        msg = await asyncio.wait_for(queue.get(), timeout=1.0)
+                        if 'proposal_open_contract' in msg:
+                            contract = msg['proposal_open_contract']
+                            if contract.get('is_expired') or contract.get('status') != 'open':
+                                profit = contract.get('profit', 0)
+                                self.log(f"CLOSED {symbol} | Profit: ${profit}")
+                                if symbol in self.active_positions: del self.active_positions[symbol]
+
+                                bal_res = await api.balance()
+                                if 'balance' in bal_res:
+                                    self.balance = float(bal_res['balance']['balance'])
+                                    self.update_status()
+                                break
+                    except asyncio.TimeoutError:
+                        continue
+            finally:
+                subscription_obj.dispose()
         except Exception as e:
             self.log(f"Monitor error for {symbol}: {e}", "error")
             if symbol in self.active_positions: del self.active_positions[symbol]

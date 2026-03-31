@@ -10,19 +10,21 @@ import sys
 from live_multiplier_bot import MultiplierBot
 from logging.handlers import RotatingFileHandler
 
-# Configure logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-if not logger.handlers:
+# Configure root logger to catch logs from all modules
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+if not root_logger.handlers:
     # Console Handler
     ch = logging.StreamHandler(sys.stdout)
-    ch.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-    logger.addHandler(ch)
+    ch.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
+    root_logger.addHandler(ch)
 
     # File Handler
     fh = RotatingFileHandler('bot.log', maxBytes=5*1024*1024, backupCount=2)
-    fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-    logger.addHandler(fh)
+    fh.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
+    root_logger.addHandler(fh)
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 # Using threading mode as per project memory
@@ -196,23 +198,39 @@ def handle_toggle_bot(data):
 
         def bot_worker():
             logger.info("Bot worker thread starting")
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(bot.start())
-            except Exception as e:
-                logger.error(f"Bot worker thread fatal error: {e}")
+            # bot is initialized outside this function, but we use a local variable to track start state
+            while True:
+                # Local check of the actual global bot object's intended state
+                # In SocketIO handlers, 'bot' is the global variable.
+                if not bot or (not bot.is_running and not bot.is_initializing and not active):
+                    break
+
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 try:
-                    socketio.emit('notify', {'msg': f'Bot Fatal Error: {str(e)}'}, namespace='/')
-                except: pass
-            finally:
-                logger.info("Bot worker thread finishing")
+                    # bot.start() now has retry logic internally for connect,
+                    # but if it returns it might be because is_running became False.
+                    loop.run_until_complete(bot.start())
+                except Exception as e:
+                    logger.error(f"Bot worker thread fatal error: {e}")
+                    try:
+                        socketio.emit('notify', {'msg': f'Bot Fatal Error: {str(e)}'}, namespace='/')
+                    except: pass
+                    time.sleep(10)
+                finally:
+                    loop.close()
+
+                # If we stopped the bot intentionally, exit the loop
+                if bot and not bot.is_running and not bot.is_initializing:
+                    break
+
+            logger.info("Bot worker thread finishing")
+            if bot:
                 bot.is_running = False
                 bot.is_initializing = False
-                try:
-                    socketio.emit('status_update', {'active': False, 'initializing': False}, namespace='/')
-                except: pass
-                loop.close()
+            try:
+                socketio.emit('status_update', {'active': False, 'initializing': False}, namespace='/')
+            except: pass
 
         thread = threading.Thread(target=bot_worker, daemon=True)
         thread.start()

@@ -43,23 +43,14 @@ class MultiplierBot:
         self.stake = 10.0
         self.stake_type = 'fixed'
         self.active_positions = {} # {symbol: contract_id}
+        self.positions_lock = threading.Lock()
 
         self.setup_logging()
 
     def setup_logging(self):
+        # Use the name 'MultiplierBot' to allow centralized configuration via root logger if desired
+        # but here we just get the logger. App.py handles the global handlers.
         self.logger = logging.getLogger("MultiplierBot")
-        self.logger.setLevel(logging.INFO)
-
-        if not self.logger.handlers:
-            # Console Handler
-            ch = logging.StreamHandler()
-            ch.setFormatter(logging.Formatter('%(message)s'))
-            self.logger.addHandler(ch)
-
-            # File Handler
-            fh = RotatingFileHandler('bot.log', maxBytes=5*1024*1024, backupCount=2)
-            fh.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
-            self.logger.addHandler(fh)
 
     def log(self, message, level="info"):
         timestamp = time.strftime('%H:%M:%S', time.gmtime())
@@ -218,41 +209,59 @@ class MultiplierBot:
         opposite_signal = signals['sell'] if target_direction == 'buy' else signals['buy']
 
         # 1. Close if opposite signal
-        if opposite_signal and symbol in self.active_positions:
-            self.log(f"[{symbol}] OPPOSITE SIGNAL detected! Closing existing position.")
-            await self.close_position(symbol, api)
+        if opposite_signal:
+            has_pos = False
+            with self.positions_lock:
+                if symbol in self.active_positions:
+                    has_pos = True
+
+            if has_pos:
+                self.log(f"[{symbol}] OPPOSITE SIGNAL detected! Closing existing position.")
+                await self.close_position(symbol, api)
 
         # 2. Open if entry signal and no position
-        if entry_signal and symbol not in self.active_positions:
-            self.log(f"[{symbol}] ENTRY SIGNAL detected!")
-            await self.place_trade_isolated(symbol, api)
+        if entry_signal:
+            has_pos = False
+            with self.positions_lock:
+                if symbol in self.active_positions:
+                    has_pos = True
+
+            if not has_pos:
+                self.log(f"[{symbol}] ENTRY SIGNAL detected!")
+                await self.place_trade_isolated(symbol, api)
 
     async def close_position(self, symbol, api):
-        if symbol not in self.active_positions: return
+        with self.positions_lock:
+            if symbol not in self.active_positions: return
+            contract_id = self.active_positions.get(symbol)
 
-        contract_id = self.active_positions.get(symbol)
         if not contract_id: return
 
         try:
             res = await asyncio.wait_for(api.sell({"sell": contract_id, "price": 0}), timeout=15)
             if 'sell' in res:
                 self.log(f"SUCCESS: {symbol} closed manually on opposite signal.")
-                if symbol in self.active_positions: del self.active_positions[symbol]
+                with self.positions_lock:
+                    if self.active_positions.get(symbol) == contract_id:
+                        del self.active_positions[symbol]
             else:
                 err_msg = res.get('error', {}).get('message', 'Unknown error')
                 self.log(f"ERROR closing {symbol}: {err_msg}", "error")
                 if "invalid contract" in err_msg.lower() or "not found" in err_msg.lower():
                     # If contract is already gone, clean up
-                    if symbol in self.active_positions: del self.active_positions[symbol]
+                    with self.positions_lock:
+                        if self.active_positions.get(symbol) == contract_id:
+                            del self.active_positions[symbol]
         except Exception as e:
             self.log(f"Close error {symbol}: {e}", "error")
 
     async def place_trade_isolated(self, symbol, api):
         # Double check with a quick portfolio sync before placing
         await self.sync_open_positions(api)
-        if symbol in self.active_positions:
-            self.log(f"Skipping trade placement for {symbol}: position already exists.")
-            return
+        with self.positions_lock:
+            if symbol in self.active_positions:
+                self.log(f"Skipping trade placement for {symbol}: position already exists.")
+                return
 
         config = STRATEGY_CONFIG[symbol]
         actual_stake = self.stake
@@ -279,7 +288,8 @@ class MultiplierBot:
             res = await api.buy(params)
             if 'buy' in res:
                 cid = res['buy']['contract_id']
-                self.active_positions[symbol] = cid
+                with self.positions_lock:
+                    self.active_positions[symbol] = cid
                 self.log(f"SUCCESS: {symbol} placed! ID: {cid}")
                 asyncio.create_task(self.monitor_contract_isolated(symbol, cid, api))
             else:
@@ -305,7 +315,9 @@ class MultiplierBot:
                             if contract.get('is_expired') or contract.get('status') != 'open':
                                 profit = contract.get('profit', 0)
                                 self.log(f"CLOSED {symbol} | Profit: ${profit}")
-                                if symbol in self.active_positions: del self.active_positions[symbol]
+                                with self.positions_lock:
+                                    if self.active_positions.get(symbol) == contract_id:
+                                        del self.active_positions[symbol]
 
                                 bal_res = await api.balance()
                                 if 'balance' in bal_res:
@@ -318,7 +330,9 @@ class MultiplierBot:
                 subscription_obj.dispose()
         except Exception as e:
             self.log(f"Monitor error for {symbol}: {e}", "error")
-            if symbol in self.active_positions: del self.active_positions[symbol]
+            with self.positions_lock:
+                if self.active_positions.get(symbol) == contract_id:
+                    del self.active_positions[symbol]
 
     async def sync_open_positions(self, api):
         """Fetches current open contracts and resumes monitoring."""
@@ -327,21 +341,22 @@ class MultiplierBot:
             if 'portfolio' in res:
                 contracts = res['portfolio'].get('contracts', [])
                 found_symbols = set()
-                for c in contracts:
-                    symbol = c.get('symbol')
-                    cid = c.get('contract_id')
-                    if symbol in ['BOOM500', 'CRASH500'] and cid:
-                        found_symbols.add(symbol)
-                        if self.active_positions.get(symbol) != cid:
-                            self.active_positions[symbol] = cid
-                            self.log(f"Resuming monitoring for existing {symbol} position: {cid}")
-                            asyncio.create_task(self.monitor_contract_isolated(symbol, cid, api))
+                with self.positions_lock:
+                    for c in contracts:
+                        symbol = c.get('symbol')
+                        cid = c.get('contract_id')
+                        if symbol in ['BOOM500', 'CRASH500'] and cid:
+                            found_symbols.add(symbol)
+                            if self.active_positions.get(symbol) != cid:
+                                self.active_positions[symbol] = cid
+                                self.log(f"Resuming monitoring for existing {symbol} position: {cid}")
+                                asyncio.create_task(self.monitor_contract_isolated(symbol, cid, api))
 
-                # Clean up local positions that are not in the portfolio
-                for symbol in list(self.active_positions.keys()):
-                    if symbol not in found_symbols:
-                        self.log(f"Cleaning up ghost position for {symbol}")
-                        del self.active_positions[symbol]
+                    # Clean up local positions that are not in the portfolio
+                    for symbol in list(self.active_positions.keys()):
+                        if symbol not in found_symbols:
+                            self.log(f"Cleaning up ghost position for {symbol}")
+                            del self.active_positions[symbol]
         except Exception as e:
             self.log(f"Error syncing portfolio: {e}", "error")
 

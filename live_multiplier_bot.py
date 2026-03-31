@@ -5,6 +5,7 @@ import time
 import json
 import os
 import logging
+from logging.handlers import RotatingFileHandler
 import threading
 from deriv_api import DerivAPI
 import ta
@@ -43,8 +44,22 @@ class MultiplierBot:
         self.stake_type = 'fixed'
         self.active_positions = {} # {symbol: contract_id}
 
-        logging.basicConfig(level=logging.INFO, format='%(message)s')
+        self.setup_logging()
+
+    def setup_logging(self):
         self.logger = logging.getLogger("MultiplierBot")
+        self.logger.setLevel(logging.INFO)
+
+        if not self.logger.handlers:
+            # Console Handler
+            ch = logging.StreamHandler()
+            ch.setFormatter(logging.Formatter('%(message)s'))
+            self.logger.addHandler(ch)
+
+            # File Handler
+            fh = RotatingFileHandler('bot.log', maxBytes=5*1024*1024, backupCount=2)
+            fh.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
+            self.logger.addHandler(fh)
 
     def log(self, message, level="info"):
         timestamp = time.strftime('%H:%M:%S', time.gmtime())
@@ -62,6 +77,10 @@ class MultiplierBot:
             self.balance = float(auth['authorize']['balance'])
             self.currency = auth['authorize']['currency']
             self.log(f"Connected! Balance: {self.balance} {self.currency}")
+
+            # Sync existing positions on connect
+            await self.sync_open_positions(self.api)
+
             self.update_status()
             return True
         except Exception as e:
@@ -132,6 +151,9 @@ class MultiplierBot:
     async def run_symbol(self, symbol):
         symbol_api = DerivAPI(app_id=self.app_id)
         await asyncio.wait_for(symbol_api.authorize(self.api_token), timeout=15)
+
+        # Sync positions for this specific symbol_api as well to ensure it's aware
+        await self.sync_open_positions(symbol_api)
 
         # Immediate history fetch
         res_1m = await asyncio.wait_for(symbol_api.ticks_history({'ticks_history': symbol, 'end': 'latest', 'count': 500, 'granularity': 60, 'style': 'candles'}), timeout=20)
@@ -212,7 +234,7 @@ class MultiplierBot:
         if not contract_id: return
 
         try:
-            res = await api.sell({"sell": contract_id, "price": 0})
+            res = await asyncio.wait_for(api.sell({"sell": contract_id, "price": 0}), timeout=15)
             if 'sell' in res:
                 self.log(f"SUCCESS: {symbol} closed manually on opposite signal.")
                 if symbol in self.active_positions: del self.active_positions[symbol]
@@ -226,7 +248,10 @@ class MultiplierBot:
             self.log(f"Close error {symbol}: {e}", "error")
 
     async def place_trade_isolated(self, symbol, api):
+        # Double check with a quick portfolio sync before placing
+        await self.sync_open_positions(api)
         if symbol in self.active_positions:
+            self.log(f"Skipping trade placement for {symbol}: position already exists.")
             return
 
         config = STRATEGY_CONFIG[symbol]
@@ -294,6 +319,31 @@ class MultiplierBot:
         except Exception as e:
             self.log(f"Monitor error for {symbol}: {e}", "error")
             if symbol in self.active_positions: del self.active_positions[symbol]
+
+    async def sync_open_positions(self, api):
+        """Fetches current open contracts and resumes monitoring."""
+        try:
+            res = await asyncio.wait_for(api.portfolio(), timeout=15)
+            if 'portfolio' in res:
+                contracts = res['portfolio'].get('contracts', [])
+                found_symbols = set()
+                for c in contracts:
+                    symbol = c.get('symbol')
+                    cid = c.get('contract_id')
+                    if symbol in ['BOOM500', 'CRASH500'] and cid:
+                        found_symbols.add(symbol)
+                        if self.active_positions.get(symbol) != cid:
+                            self.active_positions[symbol] = cid
+                            self.log(f"Resuming monitoring for existing {symbol} position: {cid}")
+                            asyncio.create_task(self.monitor_contract_isolated(symbol, cid, api))
+
+                # Clean up local positions that are not in the portfolio
+                for symbol in list(self.active_positions.keys()):
+                    if symbol not in found_symbols:
+                        self.log(f"Cleaning up ghost position for {symbol}")
+                        del self.active_positions[symbol]
+        except Exception as e:
+            self.log(f"Error syncing portfolio: {e}", "error")
 
     async def stop(self):
         self.is_running = False

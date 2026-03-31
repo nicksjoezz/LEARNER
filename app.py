@@ -8,11 +8,21 @@ import time
 import logging
 import sys
 from live_multiplier_bot import MultiplierBot
+from logging.handlers import RotatingFileHandler
 
-# Configure logging to stdout
-logging.basicConfig(level=logging.INFO, stream=sys.stdout,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Configure logging
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    # Console Handler
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(ch)
+
+    # File Handler
+    fh = RotatingFileHandler('bot.log', maxBytes=5*1024*1024, backupCount=2)
+    fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(fh)
 
 app = Flask(__name__)
 # Using threading mode as per project memory

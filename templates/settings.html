@@ -68,7 +68,8 @@
         const stake = document.getElementById('stake').value;
         const stake_type = document.getElementById('stake_type').value;
 
-        socket.emit('save_settings', { api_token, mode, stake, stake_type });
+        console.log("Saving settings...");
+        window.socket.emit('save_settings', { api_token, mode, stake, stake_type });
     };
 </script>
 {% endblock %}

@@ -33,6 +33,8 @@ socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*", logge
 CONFIG_FILE = 'config.json'
 bot = None
 background_sync_started = False
+log_buffer = []
+LOG_BUFFER_SIZE = 100
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -62,7 +64,7 @@ def settings():
 
 @socketio.on('connect')
 def handle_connect():
-    global background_sync_started, bot
+    global background_sync_started, bot, log_buffer
     logger.info(f"Socket connected: {request.sid}")
 
     # Send current bot status immediately to the new client
@@ -73,6 +75,10 @@ def handle_connect():
     }
     logger.info(f"Sending initial status to {request.sid}: {status}")
     socketio.emit('status_update', status, room=request.sid)
+
+    # Send log buffer
+    for log_msg in log_buffer:
+        socketio.emit('log_update', {'msg': log_msg}, room=request.sid)
 
     # Always trigger an immediate balance check on connect
     config = load_config()
@@ -85,6 +91,24 @@ def handle_connect():
         thread = threading.Thread(target=background_sync_logic, daemon=True)
         thread.start()
         background_sync_started = True
+
+@socketio.on('save_settings')
+def handle_save_settings(data):
+    global bot
+    config = load_config()
+    config['api_token'] = data.get('api_token', config['api_token'])
+    config['mode'] = data.get('mode', config['mode'])
+    config['stake'] = float(data.get('stake', 10))
+    config['stake_type'] = data.get('stake_type', 'fixed')
+    save_config(config)
+
+    if bot:
+        bot.api_token = config['api_token']
+        bot.stake = float(config['stake'])
+        bot.stake_type = config['stake_type']
+        logger.info("Bot parameters updated with new settings")
+
+    socketio.emit('notify', {'msg': 'Settings Saved Successfully'})
 
 def immediate_balance_sync(config):
     global bot
@@ -172,6 +196,16 @@ def background_sync_logic():
         except Exception as e:
             logger.error(f"Background sync outer error: {e}")
         time.sleep(15)
+
+@socketio.on('log_message')
+def handle_log_message(data):
+    global log_buffer
+    msg = data.get('msg')
+    if msg:
+        log_buffer.append(msg)
+        if len(log_buffer) > LOG_BUFFER_SIZE:
+            log_buffer.pop(0)
+        socketio.emit('log_update', {'msg': msg})
 
 @socketio.on('toggle_bot')
 def handle_toggle_bot(data):

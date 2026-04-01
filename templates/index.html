@@ -127,6 +127,16 @@
         div.className = data.msg.includes('SUCCESS') ? 'text-green-400' : (data.msg.includes('ERROR') ? 'text-red-400' : 'text-gray-300');
         div.innerText = data.msg;
         logContainer.prepend(div);
+
+        // Remove first log placeholder if it exists
+        if (logContainer.children.length > 1 && logContainer.lastElementChild.innerText.includes('Waiting for bot')) {
+            logContainer.removeChild(logContainer.lastElementChild);
+        }
+
+        // Limit logs in UI
+        if (logContainer.children.length > 100) {
+            logContainer.removeChild(logContainer.lastElementChild);
+        }
     });
 </script>
 {% endblock %}

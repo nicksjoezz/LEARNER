@@ -59,7 +59,8 @@ class MultiplierBot:
         else: self.logger.error(full_msg)
 
         if self.socketio:
-            self.socketio.emit('log_update', {'msg': full_msg}, namespace='/')
+            # Emit to a special handler in app.py that manages the buffer
+            self.socketio.emit('log_message', {'msg': full_msg}, namespace='/')
 
     async def connect(self):
         try:

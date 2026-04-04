@@ -28,10 +28,11 @@ STRATEGY_CONFIG = {
 }
 
 class MultiplierBot:
-    def __init__(self, api_token, app_id='62845', socketio=None):
+    def __init__(self, api_token, app_id='62845', socketio=None, logger_callback=None):
         self.api_token = api_token
         self.app_id = app_id
         self.socketio = socketio
+        self.logger_callback = logger_callback
         self.api = None
         self.is_running = False
         self.is_initializing = False
@@ -53,14 +54,16 @@ class MultiplierBot:
         self.logger = logging.getLogger("MultiplierBot")
 
     def log(self, message, level="info"):
-        timestamp = time.strftime('%H:%M:%S', time.gmtime())
-        full_msg = f"{timestamp} | {message}"
-        if level == "info": self.logger.info(full_msg)
-        else: self.logger.error(full_msg)
+        if self.logger_callback:
+            self.logger_callback(message)
+        else:
+            timestamp = time.strftime('%H:%M:%S', time.gmtime())
+            full_msg = f"{timestamp} | {message}"
+            if level == "info": self.logger.info(full_msg)
+            else: self.logger.error(full_msg)
 
-        if self.socketio:
-            # Emit to a special handler in app.py that manages the buffer
-            self.socketio.emit('log_message', {'msg': full_msg}, namespace='/')
+            if self.socketio:
+                self.socketio.emit('log_update', {'msg': full_msg}, namespace='/')
 
     async def connect(self):
         try:
@@ -117,8 +120,13 @@ class MultiplierBot:
 
             self.log("All symbol workers active.")
 
+            alive_counter = 0
             while self.is_running:
                 await asyncio.sleep(5)
+                alive_counter += 5
+                if alive_counter >= 3600: # Every hour
+                    self.log("Background Monitor: 24/7 Service is Active and Running.")
+                    alive_counter = 0
         except Exception as e:
             self.log(f"Bot start error: {e}", "error")
         finally:

@@ -138,5 +138,10 @@
             logContainer.removeChild(logContainer.lastElementChild);
         }
     });
+
+    window.socket.on('connect', () => {
+        console.log("Socket connected, clearing UI log container and waiting for buffer...");
+        logContainer.innerHTML = '<div class="text-gray-600">Restoring background logs...</div>';
+    });
 </script>
 {% endblock %}

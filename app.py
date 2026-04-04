@@ -36,6 +36,23 @@ background_sync_started = False
 log_buffer = []
 LOG_BUFFER_SIZE = 100
 
+def add_to_log(message):
+    global log_buffer
+    timestamp = time.strftime('%H:%M:%S', time.gmtime())
+    full_msg = f"{timestamp} | {message}"
+
+    # Update buffer
+    if not log_buffer or log_buffer[-1] != full_msg:
+        log_buffer.append(full_msg)
+        if len(log_buffer) > LOG_BUFFER_SIZE:
+            log_buffer.pop(0)
+
+    # Broadcast to all clients
+    socketio.emit('log_update', {'msg': full_msg}, namespace='/')
+
+    # Also log to file/console
+    logger.info(message)
+
 def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
@@ -76,9 +93,16 @@ def handle_connect():
     logger.info(f"Sending initial status to {request.sid}: {status}")
     socketio.emit('status_update', status, room=request.sid)
 
-    # Send log buffer
-    for log_msg in log_buffer:
-        socketio.emit('log_update', {'msg': log_msg}, room=request.sid)
+    # Send log buffer with slight delay to ensure client is ready
+    def send_buffer(sid, buffer_copy):
+        time.sleep(1.0)
+        for log_msg in buffer_copy:
+            socketio.emit('log_update', {'msg': log_msg}, to=sid, namespace='/')
+            time.sleep(0.01)
+
+    if log_buffer:
+        logger.info(f"Sending {len(log_buffer)} buffered logs to {request.sid}")
+        threading.Thread(target=send_buffer, args=(request.sid, list(log_buffer)), daemon=True).start()
 
     # Always trigger an immediate balance check on connect
     config = load_config()
@@ -197,15 +221,17 @@ def background_sync_logic():
             logger.error(f"Background sync outer error: {e}")
         time.sleep(15)
 
-@socketio.on('log_message')
-def handle_log_message(data):
+@socketio.on('internal_log')
+def handle_internal_log(data):
     global log_buffer
     msg = data.get('msg')
     if msg:
-        log_buffer.append(msg)
-        if len(log_buffer) > LOG_BUFFER_SIZE:
-            log_buffer.pop(0)
-        socketio.emit('log_update', {'msg': msg})
+        if not log_buffer or log_buffer[-1] != msg:
+            log_buffer.append(msg)
+            if len(log_buffer) > LOG_BUFFER_SIZE:
+                log_buffer.pop(0)
+        # Broadcast to all frontend clients
+        socketio.emit('log_update', {'msg': msg}, namespace='/')
 
 @socketio.on('toggle_bot')
 def handle_toggle_bot(data):
@@ -225,7 +251,7 @@ def handle_toggle_bot(data):
             return
 
         if not bot:
-            bot = MultiplierBot(api_token=config['api_token'], socketio=socketio)
+            bot = MultiplierBot(api_token=config['api_token'], socketio=socketio, logger_callback=add_to_log)
 
         bot.stake = float(config['stake'])
         bot.stake_type = config['stake_type']
@@ -235,15 +261,12 @@ def handle_toggle_bot(data):
             # bot is initialized outside this function, but we use a local variable to track start state
             while True:
                 # Local check of the actual global bot object's intended state
-                # In SocketIO handlers, 'bot' is the global variable.
                 if not bot or (not bot.is_running and not bot.is_initializing and not active):
                     break
 
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    # bot.start() now has retry logic internally for connect,
-                    # but if it returns it might be because is_running became False.
                     loop.run_until_complete(bot.start())
                 except Exception as e:
                     logger.error(f"Bot worker thread fatal error: {e}")

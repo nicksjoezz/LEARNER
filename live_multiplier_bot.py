@@ -93,6 +93,12 @@ class MultiplierBot:
     def calculate_strategy(self, symbol):
         df_with_signals = crash_boom_mtf_strategy(self.history_1m[symbol], self.history_15m[symbol], symbol)
         last_signal = df_with_signals.iloc[-2]
+
+        # Log state for debugging
+        rsi = round(last_signal.get('rsi', 0), 2)
+        trend = "UP" if last_signal.get('15m_trend_up') else "DOWN"
+        self.log(f"[{symbol}] Analysis: RSI={rsi} | 15m Trend={trend}")
+
         return {
             'buy': last_signal.get('buy', False),
             'sell': last_signal.get('sell', False)
@@ -136,17 +142,16 @@ class MultiplierBot:
 
     def symbol_worker_thread(self, symbol):
         self.log(f"Worker thread for {symbol} starting...")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
         while self.is_running:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(self.run_symbol(symbol))
             except Exception as e:
                 self.log(f"Worker for {symbol} crashed: {e}. Restarting in 10s...", "error")
                 time.sleep(10)
-
-        loop.close()
+            finally:
+                loop.close()
 
     async def run_symbol(self, symbol):
         symbol_api = DerivAPI(app_id=self.app_id)
@@ -177,9 +182,16 @@ class MultiplierBot:
         subscription = await symbol_api.subscribe({'ticks_history': symbol, 'end': 'latest', 'subscribe': 1, 'granularity': 60, 'style': 'candles', 'count': 1})
         queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
+
+        # Check for subscription success
+        if not subscription:
+            self.log(f"[{symbol}] Failed to subscribe to OHLC stream.", "error")
+            return
+
         subscription_obj = subscription.subscribe(on_next=lambda m: loop.call_soon_threadsafe(queue.put_nowait, m))
 
         try:
+            self.log(f"[{symbol}] Subscribed to live OHLC. Monitoring...")
             while self.is_running:
                 try:
                     msg = await asyncio.wait_for(queue.get(), timeout=1.0)
@@ -350,6 +362,13 @@ class MultiplierBot:
             if 'portfolio' in res:
                 contracts = res['portfolio'].get('contracts', [])
                 found_symbols = set()
+
+                # We need to know which loop we're in to safely create tasks
+                try:
+                    current_loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    current_loop = None
+
                 with self.positions_lock:
                     for c in contracts:
                         symbol = c.get('symbol')
@@ -359,7 +378,8 @@ class MultiplierBot:
                             if self.active_positions.get(symbol) != cid:
                                 self.active_positions[symbol] = cid
                                 self.log(f"Resuming monitoring for existing {symbol} position: {cid}")
-                                asyncio.create_task(self.monitor_contract_isolated(symbol, cid, api))
+                                if current_loop:
+                                    current_loop.create_task(self.monitor_contract_isolated(symbol, cid, api))
 
                     # Clean up local positions that are not in the portfolio
                     for symbol in list(self.active_positions.keys()):

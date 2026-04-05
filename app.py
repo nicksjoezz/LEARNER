@@ -38,8 +38,12 @@ LOG_BUFFER_SIZE = 100
 
 def add_to_log(message):
     global log_buffer
-    timestamp = time.strftime('%H:%M:%S', time.gmtime())
-    full_msg = f"{timestamp} | {message}"
+    # Message might already have a timestamp if coming from MultiplierBot.log
+    if " | " in message and message[:2].isdigit() and message[2] == ":":
+        full_msg = message
+    else:
+        timestamp = time.strftime('%H:%M:%S', time.gmtime())
+        full_msg = f"{timestamp} | {message}"
 
     # Update buffer
     if not log_buffer or log_buffer[-1] != full_msg:
@@ -51,7 +55,7 @@ def add_to_log(message):
     socketio.emit('log_update', {'msg': full_msg}, namespace='/')
 
     # Also log to file/console
-    logger.info(message)
+    logger.info(full_msg)
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -95,13 +99,14 @@ def handle_connect():
 
     # Send log buffer with slight delay to ensure client is ready
     def send_buffer(sid, buffer_copy):
-        time.sleep(1.0)
+        time.sleep(1.5) # Slightly longer delay
         for log_msg in buffer_copy:
             socketio.emit('log_update', {'msg': log_msg}, to=sid, namespace='/')
-            time.sleep(0.01)
+            time.sleep(0.02)
 
     if log_buffer:
         logger.info(f"Sending {len(log_buffer)} buffered logs to {request.sid}")
+        # Use sid explicitly
         threading.Thread(target=send_buffer, args=(request.sid, list(log_buffer)), daemon=True).start()
 
     # Always trigger an immediate balance check on connect

@@ -1,0 +1,198 @@
+Server initialized for threading.
+2026-04-06 04:19:42,137 Server initialized for threading.
+2026-04-06 04:19:42,139 Werkzeug appears to be used in a production deployment. Consider switching to a production web server instead.
+ * Serving Flask app 'app'
+ * Debug mode: off
+2026-04-06 04:19:42,145 [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.0.2:5000
+2026-04-06 04:19:42,145 [33mPress CTRL+C to quit[0m
+2026-04-06 04:19:48,548 127.0.0.1 - - [06/Apr/2026 04:19:48] "GET / HTTP/1.1" 200 -
+c-IUo28YwiPKqx-tAAAA: Sending packet OPEN data {'sid': 'c-IUo28YwiPKqx-tAAAA', 'upgrades': ['websocket'], 'pingTimeout': 20000, 'pingInterval': 25000, 'maxPayload': 1000000}
+2026-04-06 04:19:48,949 c-IUo28YwiPKqx-tAAAA: Sending packet OPEN data {'sid': 'c-IUo28YwiPKqx-tAAAA', 'upgrades': ['websocket'], 'pingTimeout': 20000, 'pingInterval': 25000, 'maxPayload': 1000000}
+2026-04-06 04:19:48,950 127.0.0.1 - - [06/Apr/2026 04:19:48] "GET /socket.io/?EIO=4&transport=polling&t=PrX1AfC HTTP/1.1" 200 -
+c-IUo28YwiPKqx-tAAAA: Received packet MESSAGE data 0
+2026-04-06 04:19:49,181 c-IUo28YwiPKqx-tAAAA: Received packet MESSAGE data 0
+2026-04-06 04:19:49,182 Socket connected: zfbCJToAflXjDVd3AAAB
+2026-04-06 04:19:49,183 Sending initial status to zfbCJToAflXjDVd3AAAB: {'active': False, 'initializing': False, 'balance': '0.00 USD'}
+emitting event "status_update" to zfbCJToAflXjDVd3AAAB [/]
+2026-04-06 04:19:49,183 emitting event "status_update" to zfbCJToAflXjDVd3AAAB [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["status_update",{"active":false,"initializing":false,"balance":"0.00 USD"}]
+2026-04-06 04:19:49,183 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["status_update",{"active":false,"initializing":false,"balance":"0.00 USD"}]
+2026-04-06 04:19:49,183 Triggering immediate balance sync
+2026-04-06 04:19:49,185 127.0.0.1 - - [06/Apr/2026 04:19:49] "GET /socket.io/?EIO=4&transport=polling&t=PrX1Ait&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+2026-04-06 04:19:49,186 Starting background sync thread
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 0{"sid":"zfbCJToAflXjDVd3AAAB"}
+2026-04-06 04:19:49,196 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 0{"sid":"zfbCJToAflXjDVd3AAAB"}
+2026-04-06 04:19:49,197 127.0.0.1 - - [06/Apr/2026 04:19:49] "POST /socket.io/?EIO=4&transport=polling&t=PrX1Ais&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+2026-04-06 04:19:49,298 127.0.0.1 - - [06/Apr/2026 04:19:49] "GET /socket.io/?EIO=4&transport=polling&t=PrX1AkE&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+emitting event "status_update" to all [/]
+2026-04-06 04:19:49,848 emitting event "status_update" to all [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":false,"initializing":false}]
+2026-04-06 04:19:49,849 127.0.0.1 - - [06/Apr/2026 04:19:49] "GET /socket.io/?EIO=4&transport=polling&t=PrX1Al4&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+2026-04-06 04:19:49,849 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":false,"initializing":false}]
+emitting event "status_update" to all [/]
+2026-04-06 04:19:49,879 emitting event "status_update" to all [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":false,"initializing":false}]
+2026-04-06 04:19:49,879 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":false,"initializing":false}]
+2026-04-06 04:19:49,881 127.0.0.1 - - [06/Apr/2026 04:19:49] "GET /socket.io/?EIO=4&transport=polling&t=PrX1AtT&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+c-IUo28YwiPKqx-tAAAA: Received packet MESSAGE data 2["toggle_bot",{"active":true}]
+2026-04-06 04:19:52,497 c-IUo28YwiPKqx-tAAAA: Received packet MESSAGE data 2["toggle_bot",{"active":true}]
+received event "toggle_bot" from zfbCJToAflXjDVd3AAAB [/]
+2026-04-06 04:19:52,498 received event "toggle_bot" from zfbCJToAflXjDVd3AAAB [/]
+2026-04-06 04:19:52,498 Toggle bot requested: True
+2026-04-06 04:19:52,499 127.0.0.1 - - [06/Apr/2026 04:19:52] "POST /socket.io/?EIO=4&transport=polling&t=PrX1BWk&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+2026-04-06 04:19:52,500 Bot worker thread starting
+emitting event "log_update" to all [/]
+2026-04-06 04:19:52,501 emitting event "log_update" to all [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:52 | Bot system starting up..."}]
+2026-04-06 04:19:52,501 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:52 | Bot system starting up..."}]
+2026-04-06 04:19:52,501 04:19:52 | Bot system starting up...
+2026-04-06 04:19:52,502 127.0.0.1 - - [06/Apr/2026 04:19:52] "GET /socket.io/?EIO=4&transport=polling&t=PrX1Au0&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+emitting event "log_update" to all [/]
+2026-04-06 04:19:52,990 emitting event "log_update" to all [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:52 | Connected to Deriv! Balance: 185.78 USD"}]
+2026-04-06 04:19:52,991 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:52 | Connected to Deriv! Balance: 185.78 USD"}]
+2026-04-06 04:19:52,991 04:19:52 | Connected to Deriv! Balance: 185.78 USD
+2026-04-06 04:19:52,992 127.0.0.1 - - [06/Apr/2026 04:19:52] "GET /socket.io/?EIO=4&transport=polling&t=PrX1BXB&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+emitting event "log_update" to all [/]
+2026-04-06 04:19:53,207 emitting event "log_update" to all [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | Unified monitoring loop active for BOOM500 and CRASH500."}]
+2026-04-06 04:19:53,207 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | Unified monitoring loop active for BOOM500 and CRASH500."}]
+2026-04-06 04:19:53,207 04:19:53 | Unified monitoring loop active for BOOM500 and CRASH500.
+2026-04-06 04:19:53,208 127.0.0.1 - - [06/Apr/2026 04:19:53] "GET /socket.io/?EIO=4&transport=polling&t=PrX1BeZ&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+emitting event "log_update" to all [/]
+2026-04-06 04:19:53,581 emitting event "log_update" to all [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | [BOOM500] Historical data synchronized."}]
+2026-04-06 04:19:53,582 127.0.0.1 - - [06/Apr/2026 04:19:53] "GET /socket.io/?EIO=4&transport=polling&t=PrX1Bh-&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+2026-04-06 04:19:53,581 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | [BOOM500] Historical data synchronized."}]
+2026-04-06 04:19:53,583 04:19:53 | [BOOM500] Historical data synchronized.
+emitting event "log_update" to all [/]
+2026-04-06 04:19:53,595 emitting event "log_update" to all [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | [BOOM500] Analysis: RSI=49.52 | 15m Trend=UP"}]
+2026-04-06 04:19:53,595 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | [BOOM500] Analysis: RSI=49.52 | 15m Trend=UP"}]
+2026-04-06 04:19:53,595 04:19:53 | [BOOM500] Analysis: RSI=49.52 | 15m Trend=UP
+2026-04-06 04:19:53,602 127.0.0.1 - - [06/Apr/2026 04:19:53] "GET /socket.io/?EIO=4&transport=polling&t=PrX1Bn-&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+emitting event "log_update" to all [/]
+2026-04-06 04:19:54,492 emitting event "log_update" to all [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Historical data synchronized."}]
+2026-04-06 04:19:54,492 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Historical data synchronized."}]
+2026-04-06 04:19:54,493 04:19:54 | [CRASH500] Historical data synchronized.
+2026-04-06 04:19:54,493 127.0.0.1 - - [06/Apr/2026 04:19:54] "GET /socket.io/?EIO=4&transport=polling&t=PrX1Bo5&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+emitting event "log_update" to all [/]
+2026-04-06 04:19:54,502 emitting event "log_update" to all [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Analysis: RSI=37.77 | 15m Trend=DOWN"}]
+2026-04-06 04:19:54,502 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Analysis: RSI=37.77 | 15m Trend=DOWN"}]
+2026-04-06 04:19:54,503 04:19:54 | [CRASH500] Analysis: RSI=37.77 | 15m Trend=DOWN
+emitting event "log_update" to all [/]
+2026-04-06 04:19:54,507 emitting event "log_update" to all [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [BOOM500] Live OHLC subscription established."}]
+2026-04-06 04:19:54,508 127.0.0.1 - - [06/Apr/2026 04:19:54] "GET /socket.io/?EIO=4&transport=polling&t=PrX1C09&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+2026-04-06 04:19:54,508 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [BOOM500] Live OHLC subscription established."}]
+2026-04-06 04:19:54,508 04:19:54 | [BOOM500] Live OHLC subscription established.
+emitting event "log_update" to all [/]
+2026-04-06 04:19:54,509 emitting event "log_update" to all [/]
+c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Live OHLC subscription established."}]
+2026-04-06 04:19:54,509 c-IUo28YwiPKqx-tAAAA: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Live OHLC subscription established."}]
+2026-04-06 04:19:54,509 04:19:54 | [CRASH500] Live OHLC subscription established.
+2026-04-06 04:19:54,514 127.0.0.1 - - [06/Apr/2026 04:19:54] "GET /socket.io/?EIO=4&transport=polling&t=PrX1C0F&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+c-IUo28YwiPKqx-tAAAA: Received packet CLOSE data
+2026-04-06 04:20:02,599 c-IUo28YwiPKqx-tAAAA: Received packet CLOSE data
+2026-04-06 04:20:02,600 127.0.0.1 - - [06/Apr/2026 04:20:02] "POST /socket.io/?EIO=4&transport=polling&t=PrX1D-Y&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+2026-04-06 04:20:02,601 127.0.0.1 - - [06/Apr/2026 04:20:02] "GET /socket.io/?EIO=4&transport=polling&t=PrX1C0L&sid=c-IUo28YwiPKqx-tAAAA HTTP/1.1" 200 -
+2026-04-06 04:20:02,603 127.0.0.1 - - [06/Apr/2026 04:20:02] "GET / HTTP/1.1" 200 -
+wu7jn2aP1w2vDc47AAAC: Sending packet OPEN data {'sid': 'wu7jn2aP1w2vDc47AAAC', 'upgrades': ['websocket'], 'pingTimeout': 20000, 'pingInterval': 25000, 'maxPayload': 1000000}
+2026-04-06 04:20:02,668 wu7jn2aP1w2vDc47AAAC: Sending packet OPEN data {'sid': 'wu7jn2aP1w2vDc47AAAC', 'upgrades': ['websocket'], 'pingTimeout': 20000, 'pingInterval': 25000, 'maxPayload': 1000000}
+2026-04-06 04:20:02,669 127.0.0.1 - - [06/Apr/2026 04:20:02] "GET /socket.io/?EIO=4&transport=polling&t=PrX1D_a HTTP/1.1" 200 -
+wu7jn2aP1w2vDc47AAAC: Received packet MESSAGE data 0
+2026-04-06 04:20:02,765 wu7jn2aP1w2vDc47AAAC: Received packet MESSAGE data 0
+2026-04-06 04:20:02,766 Socket connected: LWvXsVU7b-LHOJOJAAAD
+2026-04-06 04:20:02,766 Sending initial status to LWvXsVU7b-LHOJOJAAAD: {'active': True, 'initializing': False, 'balance': '185.78 USD'}
+emitting event "status_update" to LWvXsVU7b-LHOJOJAAAD [/]
+2026-04-06 04:20:02,766 emitting event "status_update" to LWvXsVU7b-LHOJOJAAAD [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["status_update",{"active":true,"initializing":false,"balance":"185.78 USD"}]
+2026-04-06 04:20:02,766 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["status_update",{"active":true,"initializing":false,"balance":"185.78 USD"}]
+2026-04-06 04:20:02,766 Sending 9 buffered logs to LWvXsVU7b-LHOJOJAAAD
+2026-04-06 04:20:02,767 127.0.0.1 - - [06/Apr/2026 04:20:02] "GET /socket.io/?EIO=4&transport=polling&t=PrX1E19&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+2026-04-06 04:20:02,769 Triggering immediate balance sync
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 0{"sid":"LWvXsVU7b-LHOJOJAAAD"}
+2026-04-06 04:20:02,769 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 0{"sid":"LWvXsVU7b-LHOJOJAAAD"}
+2026-04-06 04:20:02,770 127.0.0.1 - - [06/Apr/2026 04:20:02] "POST /socket.io/?EIO=4&transport=polling&t=PrX1E18&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+2026-04-06 04:20:02,796 127.0.0.1 - - [06/Apr/2026 04:20:02] "GET /socket.io/?EIO=4&transport=polling&t=PrX1E1e&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+emitting event "status_update" to all [/]
+2026-04-06 04:20:03,655 emitting event "status_update" to all [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":true,"initializing":false}]
+2026-04-06 04:20:03,655 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":true,"initializing":false}]
+2026-04-06 04:20:03,656 127.0.0.1 - - [06/Apr/2026 04:20:03] "GET /socket.io/?EIO=4&transport=polling&t=PrX1E1r&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+2026-04-06 04:20:04,268 emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:52 | Bot system starting up..."}]
+2026-04-06 04:20:04,268 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:52 | Bot system starting up..."}]
+2026-04-06 04:20:04,269 127.0.0.1 - - [06/Apr/2026 04:20:04] "GET /socket.io/?EIO=4&transport=polling&t=PrX1EFE&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+2026-04-06 04:20:04,289 emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:52 | Connected to Deriv! Balance: 185.78 USD"}]
+2026-04-06 04:20:04,289 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:52 | Connected to Deriv! Balance: 185.78 USD"}]
+2026-04-06 04:20:04,289 127.0.0.1 - - [06/Apr/2026 04:20:04] "GET /socket.io/?EIO=4&transport=polling&t=PrX1EOn&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+2026-04-06 04:20:04,309 emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | Unified monitoring loop active for BOOM500 and CRASH500."}]
+2026-04-06 04:20:04,310 127.0.0.1 - - [06/Apr/2026 04:20:04] "GET /socket.io/?EIO=4&transport=polling&t=PrX1EP3&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+2026-04-06 04:20:04,310 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | Unified monitoring loop active for BOOM500 and CRASH500."}]
+emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+2026-04-06 04:20:04,330 emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | [BOOM500] Historical data synchronized."}]
+2026-04-06 04:20:04,331 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | [BOOM500] Historical data synchronized."}]
+2026-04-06 04:20:04,331 127.0.0.1 - - [06/Apr/2026 04:20:04] "GET /socket.io/?EIO=4&transport=polling&t=PrX1EPO&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+2026-04-06 04:20:04,351 emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | [BOOM500] Analysis: RSI=49.52 | 15m Trend=UP"}]
+2026-04-06 04:20:04,351 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:53 | [BOOM500] Analysis: RSI=49.52 | 15m Trend=UP"}]
+2026-04-06 04:20:04,352 127.0.0.1 - - [06/Apr/2026 04:20:04] "GET /socket.io/?EIO=4&transport=polling&t=PrX1EPl&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+2026-04-06 04:20:04,372 emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Historical data synchronized."}]
+2026-04-06 04:20:04,372 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Historical data synchronized."}]
+2026-04-06 04:20:04,372 127.0.0.1 - - [06/Apr/2026 04:20:04] "GET /socket.io/?EIO=4&transport=polling&t=PrX1EQ2&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+2026-04-06 04:20:04,392 emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Analysis: RSI=37.77 | 15m Trend=DOWN"}]
+2026-04-06 04:20:04,393 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Analysis: RSI=37.77 | 15m Trend=DOWN"}]
+2026-04-06 04:20:04,393 127.0.0.1 - - [06/Apr/2026 04:20:04] "GET /socket.io/?EIO=4&transport=polling&t=PrX1EQO&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+2026-04-06 04:20:04,413 emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [BOOM500] Live OHLC subscription established."}]
+2026-04-06 04:20:04,413 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [BOOM500] Live OHLC subscription established."}]
+2026-04-06 04:20:04,414 127.0.0.1 - - [06/Apr/2026 04:20:04] "GET /socket.io/?EIO=4&transport=polling&t=PrX1EQi&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+2026-04-06 04:20:04,434 emitting event "log_update" to LWvXsVU7b-LHOJOJAAAD [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Live OHLC subscription established."}]
+2026-04-06 04:20:04,434 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["log_update",{"msg":"04:19:54 | [CRASH500] Live OHLC subscription established."}]
+2026-04-06 04:20:04,434 127.0.0.1 - - [06/Apr/2026 04:20:04] "GET /socket.io/?EIO=4&transport=polling&t=PrX1ER0&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+emitting event "status_update" to all [/]
+2026-04-06 04:20:05,711 emitting event "status_update" to all [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":true,"initializing":false}]
+2026-04-06 04:20:05,712 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":true,"initializing":false}]
+2026-04-06 04:20:05,712 127.0.0.1 - - [06/Apr/2026 04:20:05] "GET /socket.io/?EIO=4&transport=polling&t=PrX1ERL&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+emitting event "status_update" to all [/]
+2026-04-06 04:20:21,473 emitting event "status_update" to all [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":true,"initializing":false}]
+2026-04-06 04:20:21,473 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":true,"initializing":false}]
+2026-04-06 04:20:21,474 127.0.0.1 - - [06/Apr/2026 04:20:21] "GET /socket.io/?EIO=4&transport=polling&t=PrX1ElK&sid=wu7jn2aP1w2vDc47AAAC HTTP/1.1" 200 -
+wu7jn2aP1w2vDc47AAAC: Sending packet PING data None
+2026-04-06 04:20:27,669 wu7jn2aP1w2vDc47AAAC: Sending packet PING data None
+emitting event "status_update" to all [/]
+2026-04-06 04:20:37,336 emitting event "status_update" to all [/]
+wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":true,"initializing":false}]
+2026-04-06 04:20:37,336 wu7jn2aP1w2vDc47AAAC: Sending packet MESSAGE data 2["status_update",{"balance":"185.78 USD","active":true,"initializing":false}]
+wu7jn2aP1w2vDc47AAAC: Client is gone, closing socket
+2026-04-06 04:20:48,949 wu7jn2aP1w2vDc47AAAC: Client is gone, closing socket
+wu7jn2aP1w2vDc47AAAC: Client is gone, closing socket
+2026-04-06 04:20:48,950 wu7jn2aP1w2vDc47AAAC: Client is gone, closing socket
+emitting event "status_update" to all [/]
+2026-04-06 04:20:53,104 emitting event "status_update" to all [/]
+emitting event "log_update" to all [/]
+2026-04-06 04:21:09,627 emitting event "log_update" to all [/]
+2026-04-06 04:21:09,627 04:21:09 | Portfolio sync error:
+2026-04-06 04:21:18,175 Background sync error:

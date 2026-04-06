@@ -18,6 +18,7 @@ if not root_logger.handlers:
     ch = logging.StreamHandler(sys.stdout)
     ch.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
     root_logger.addHandler(ch)
+    sys.stdout.reconfigure(line_buffering=True)
 
     # File Handler
     fh = RotatingFileHandler('bot.log', maxBytes=5*1024*1024, backupCount=2)
@@ -99,14 +100,17 @@ def handle_connect():
 
     # Send log buffer with slight delay to ensure client is ready
     def send_buffer(sid, buffer_copy):
-        time.sleep(1.5) # Slightly longer delay
+        time.sleep(1.5) # Increased delay to ensure client side is ready
+        # Small chunks to avoid Socket.IO blocking
         for log_msg in buffer_copy:
-            socketio.emit('log_update', {'msg': log_msg}, to=sid, namespace='/')
-            time.sleep(0.02)
+            try:
+                # Use 'to' instead of 'room' for consistency
+                socketio.emit('log_update', {'msg': log_msg}, to=sid, namespace='/')
+                time.sleep(0.02)
+            except: pass
 
     if log_buffer:
         logger.info(f"Sending {len(log_buffer)} buffered logs to {request.sid}")
-        # Use sid explicitly
         threading.Thread(target=send_buffer, args=(request.sid, list(log_buffer)), daemon=True).start()
 
     # Always trigger an immediate balance check on connect
@@ -272,6 +276,8 @@ def handle_toggle_bot(data):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
+                    # bot.start() now has retry logic internally for connect,
+                    # but if it returns it might be because is_running became False.
                     loop.run_until_complete(bot.start())
                 except Exception as e:
                     logger.error(f"Bot worker thread fatal error: {e}")

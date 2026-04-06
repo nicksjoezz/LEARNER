@@ -270,7 +270,7 @@ def handle_toggle_bot(data):
             # bot is initialized outside this function, but we use a local variable to track start state
             while True:
                 # Local check of the actual global bot object's intended state
-                if not bot or (not bot.is_running and not bot.is_initializing and not active):
+                if not bot or not bot.should_run:
                     break
 
                 loop = asyncio.new_event_loop()

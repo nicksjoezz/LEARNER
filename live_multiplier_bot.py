@@ -35,6 +35,7 @@ class MultiplierBot:
         self.logger_callback = logger_callback
         self.is_running = False
         self.is_initializing = False
+        self.should_run = False
         self.history_1m = {}
         self.history_15m = {}
         self.last_1m_epoch = {}
@@ -59,11 +60,13 @@ class MultiplierBot:
                 self.socketio.emit('log_update', {'msg': full_msg}, namespace='/')
 
     async def start(self):
+        self.should_run = True
         self.is_initializing = True
         os.makedirs('market_data', exist_ok=True)
         self.log("Bot system starting up...")
 
-        while self.is_initializing:
+        while self.should_run:
+            api = None
             try:
                 api = DerivAPI(app_id=self.app_id)
                 auth = await asyncio.wait_for(api.authorize(self.api_token), timeout=15)
@@ -75,16 +78,19 @@ class MultiplierBot:
 
                 self.is_initializing = False
                 self.is_running = True
+                self.update_status()
 
                 # Run the unified monitoring loop
                 await self.monitoring_loop(api)
             except Exception as e:
-                self.log(f"Initialization error: {e}. Retrying in 10s...")
-                try: await api.disconnect()
-                except: pass
-                await asyncio.sleep(10)
+                self.log(f"System Error: {e}. Attempting recovery in 15s...")
+                self.is_running = False
+                self.update_status()
+                if api:
+                    try: await api.disconnect()
+                    except: pass
+                await asyncio.sleep(15)
             finally:
-                self.is_initializing = False
                 self.is_running = False
 
     async def monitoring_loop(self, api):
@@ -123,6 +129,7 @@ class MultiplierBot:
         last_heartbeat = time.time()
 
         try:
+            last_ohlc_time = {s: time.time() for s in symbols}
             while self.is_running:
                 # Process all available messages from all queues
                 for symbol in symbols:
@@ -130,9 +137,17 @@ class MultiplierBot:
                     while not q.empty():
                         msg = q.get_nowait()
                         if 'ohlc' in msg:
+                            last_ohlc_time[symbol] = time.time()
                             await self.handle_ohlc(symbol, msg['ohlc'], api)
 
                 now = time.time()
+
+                # Watchdog check: If no data for any symbol for 5 minutes, reconnect
+                for symbol in symbols:
+                    if now - last_ohlc_time[symbol] > 300:
+                        self.log(f"[{symbol}] Data stream timeout (5m). Triggering reconnect...", "error")
+                        return # Break to outer loop for reconnect
+
                 # Unified periodic tasks
                 if now - last_portfolio_sync > 60: # Every minute
                     await self.sync_open_positions(api)
@@ -174,6 +189,7 @@ class MultiplierBot:
             pd.DataFrame([new_row]).to_csv(f"market_data/{symbol}_1m_history.csv", mode='a', header=not os.path.exists(f"market_data/{symbol}_1m_history.csv"), index=False)
 
             if candle_start % 900 == 0:
+                self.log(f"[{symbol}] 15m candle rollover. Refreshing trend...")
                 res_15 = await api.ticks_history({'ticks_history': symbol, 'end': 'latest', 'count': 1, 'granularity': 900, 'style': 'candles'})
                 if 'candles' in res_15:
                     df_15_new = pd.DataFrame(res_15['candles'])
@@ -281,6 +297,7 @@ class MultiplierBot:
 
     async def sync_open_positions(self, api):
         try:
+            # Check if API is still connected before portfolio call
             res = await asyncio.wait_for(api.portfolio(), timeout=15)
             if 'portfolio' in res:
                 contracts = res['portfolio'].get('contracts', [])
@@ -306,5 +323,7 @@ class MultiplierBot:
         except Exception as e: self.log(f"Portfolio sync error: {e}")
 
     async def stop(self):
+        self.should_run = False
         self.is_running = False
+        self.is_initializing = False
         self.log("Bot shutdown sequence initiated.")

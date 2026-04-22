@@ -128,6 +128,7 @@ def handle_connect():
 @socketio.on('save_settings')
 def handle_save_settings(data):
     global bot
+    logger.info(f"Received save_settings: {data}")
     config = load_config()
     config['api_token'] = data.get('api_token', config['api_token'])
     config['mode'] = data.get('mode', config['mode'])
@@ -255,59 +256,59 @@ def handle_toggle_bot(data):
             socketio.emit('status_update', {'active': False, 'initializing': False}, namespace='/')
             return
 
-        if bot and (bot.is_running or bot.is_initializing):
+        if bot.is_running or bot.is_initializing or bot.should_run:
             logger.info("Bot already running or initializing")
+            bot.update_status()
             return
 
-        if not bot:
-            bot = MultiplierBot(api_token=config['api_token'], socketio=socketio, logger_callback=add_to_log)
-
+        bot.api_token = config['api_token']
         bot.stake = float(config['stake'])
         bot.stake_type = config['stake_type']
+        bot.should_run = True
+        bot.is_initializing = True # Set immediately for UI feedback
+        bot.update_status()
 
         def bot_worker():
             logger.info("Bot worker thread starting")
-            # bot is initialized outside this function, but we use a local variable to track start state
-            while True:
-                # Local check of the actual global bot object's intended state
-                if not bot or not bot.should_run:
-                    break
-
+            while bot.should_run:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    # bot.start() now has retry logic internally for connect,
-                    # but if it returns it might be because is_running became False.
                     loop.run_until_complete(bot.start())
                 except Exception as e:
                     logger.error(f"Bot worker thread fatal error: {e}")
                     try:
                         socketio.emit('notify', {'msg': f'Bot Fatal Error: {str(e)}'}, namespace='/')
                     except: pass
-                    time.sleep(10)
+                    if bot.should_run:
+                        time.sleep(10)
                 finally:
                     loop.close()
 
-                # If we stopped the bot intentionally, exit the loop
-                if bot and not bot.is_running and not bot.is_initializing:
+                if not bot.should_run:
                     break
 
             logger.info("Bot worker thread finishing")
-            if bot:
-                bot.is_running = False
-                bot.is_initializing = False
-            try:
-                socketio.emit('status_update', {'active': False, 'initializing': False}, namespace='/')
-            except: pass
+            bot.is_running = False
+            bot.is_initializing = False
+            bot.update_status()
 
         thread = threading.Thread(target=bot_worker, daemon=True)
         thread.start()
     else:
         if bot:
             logger.info("Stopping bot requested")
+            bot.should_run = False
             bot.is_running = False
             bot.is_initializing = False
+            bot.update_status()
             socketio.emit('notify', {'msg': 'Bot Stop Requested'})
+
+# Initialize bot globally
+_config = load_config()
+bot = MultiplierBot(api_token=_config['api_token'], socketio=socketio, logger_callback=add_to_log)
+bot.stake = float(_config['stake'])
+bot.stake_type = _config['stake_type']
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)

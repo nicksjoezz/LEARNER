@@ -59,6 +59,18 @@ class MultiplierBot:
                 # Direct emit as fallback
                 self.socketio.emit('log_update', {'msg': full_msg}, namespace='/')
 
+    def update_status(self):
+        if self.socketio:
+            status = {
+                'active': self.is_running,
+                'initializing': self.is_initializing,
+                'balance': f"{self.balance:.2f} {self.currency}"
+            }
+            try:
+                self.socketio.emit('status_update', status, namespace='/')
+            except Exception as e:
+                self.logger.error(f"Error emitting status update: {e}")
+
     async def start(self):
         self.should_run = True
         self.is_initializing = True
@@ -68,6 +80,8 @@ class MultiplierBot:
         while self.should_run:
             api = None
             try:
+                self.is_initializing = True
+                self.is_running = False
                 api = DerivAPI(app_id=self.app_id)
                 auth = await asyncio.wait_for(api.authorize(self.api_token), timeout=15)
                 self.balance = float(auth['authorize']['balance'])
@@ -85,6 +99,7 @@ class MultiplierBot:
             except Exception as e:
                 self.log(f"System Error: {e}. Attempting recovery in 15s...")
                 self.is_running = False
+                self.is_initializing = False
                 self.update_status()
                 if api:
                     try: await api.disconnect()
@@ -212,17 +227,24 @@ class MultiplierBot:
         entry_signal = signals['buy'] if target_direction == 'buy' else signals['sell']
         opposite_signal = signals['sell'] if target_direction == 'buy' else signals['buy']
 
+        # Enforce one position at a time GLOBALLY
+        with self.positions_lock:
+            active_symbols = list(self.active_positions.keys())
+            has_any_pos = len(active_symbols) > 0
+
         if opposite_signal:
-            with self.positions_lock: has_pos = symbol in self.active_positions
-            if has_pos:
-                self.log(f"[{symbol}] Reversal signal detected. Closing existing position.")
-                await self.close_position(symbol, api)
+            if has_any_pos:
+                self.log(f"[{symbol}] Opposite signal detected. Closing ALL existing positions.")
+                for s in active_symbols:
+                    await self.close_position(s, api)
+                has_any_pos = False
 
         if entry_signal:
-            with self.positions_lock: has_pos = symbol in self.active_positions
-            if not has_pos:
+            if not has_any_pos:
                 self.log(f"[{symbol}] Strategy match! Entering position...")
                 await self.place_trade_isolated(symbol, api)
+            else:
+                self.log(f"[{symbol}] Entry signal ignored. Another position is already open: {active_symbols}")
 
     async def close_position(self, symbol, api):
         with self.positions_lock:
@@ -326,4 +348,5 @@ class MultiplierBot:
         self.should_run = False
         self.is_running = False
         self.is_initializing = False
+        self.update_status()
         self.log("Bot shutdown sequence initiated.")

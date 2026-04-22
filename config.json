@@ -1,11 +1,7 @@
 {
     "api_token": "381klIwm4Mr8BTT",
     "app_id": "62845",
-    "symbol": "R_100",
-    "strategy": "1",
-    "trade_pc": 1,
-    "fetch_days": 365,
     "mode": "demo",
-    "stake": 1.0,
+    "stake": 15.0,
     "stake_type": "fixed"
 }

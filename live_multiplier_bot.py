@@ -47,7 +47,7 @@ class MultiplierBot:
         self.positions_lock = threading.Lock()
         self.logger = logging.getLogger("MultiplierBot")
 
-    def log(self, message):
+    def log(self, message, level="info"):
         # Always include symbol prefix if possible for clarity
         if self.logger_callback:
             self.logger_callback(message)
@@ -162,6 +162,10 @@ class MultiplierBot:
                     if now - last_ohlc_time[symbol] > 300:
                         self.log(f"[{symbol}] Data stream timeout (5m). Triggering reconnect...", "error")
                         return # Break to outer loop for reconnect
+
+                if not api.connected:
+                    self.log("API connection lost. Triggering reconnect...", "error")
+                    return
 
                 # Unified periodic tasks
                 if now - last_portfolio_sync > 60: # Every minute
@@ -318,6 +322,8 @@ class MultiplierBot:
                 if self.active_positions.get(symbol) == contract_id: del self.active_positions[symbol]
 
     async def sync_open_positions(self, api):
+        if not api or not api.connected:
+            return
         try:
             # Check if API is still connected before portfolio call
             res = await asyncio.wait_for(api.portfolio(), timeout=15)
@@ -342,7 +348,7 @@ class MultiplierBot:
                         if symbol not in found_symbols:
                             self.log(f"Cleaning up inactive tracking for {symbol}")
                             del self.active_positions[symbol]
-        except Exception as e: self.log(f"Portfolio sync error: {e}")
+        except Exception as e: self.log(f"Portfolio sync error: {e}", "error")
 
     async def stop(self):
         self.should_run = False

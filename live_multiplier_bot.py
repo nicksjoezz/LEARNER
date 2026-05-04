@@ -160,14 +160,21 @@ class MultiplierBot:
 
                 now = time.time()
 
-                # --- Keepalive ping every 30s (prevents server-side idle disconnect) ---
-                if now - last_ping > 30:
-                    try:
-                        await asyncio.wait_for(api.ping({'ping': 1}), timeout=5)
+                # --- Keepalive ping every 20s (prevents server-side idle disconnect) ---
+                if now - last_ping > 20:
+                    ping_ok = False
+                    for attempt in range(3):
+                        try:
+                            await asyncio.wait_for(api.ping({'ping': 1}), timeout=10)
+                            ping_ok = True
+                            break
+                        except Exception:
+                            await asyncio.sleep(2)
+                    if ping_ok:
                         last_ping = now
-                        portfolio_failures = 0  # Connection is alive; reset failure count
-                    except Exception as ping_err:
-                        self.log(f"Keepalive ping failed: {type(ping_err).__name__}: {ping_err}. Reconnecting...", "error")
+                        portfolio_failures = 0
+                    else:
+                        self.log("Keepalive ping failed 3 attempts. Reconnecting...", "error")
                         return
 
                 # --- Watchdog: no OHLC data for 2 minutes → reconnect ---
@@ -251,24 +258,23 @@ class MultiplierBot:
         entry_signal = signals['buy'] if target_direction == 'buy' else signals['sell']
         opposite_signal = signals['sell'] if target_direction == 'buy' else signals['buy']
 
-        # Enforce one position at a time GLOBALLY
+        # Each symbol manages its own position independently.
+        # BOOM500 and CRASH500 are separate markets — one bearish, one bullish.
+        # Closing CRASH500 because BOOM500 saw a sell signal is wrong.
         with self.positions_lock:
-            active_symbols = list(self.active_positions.keys())
-            has_any_pos = len(active_symbols) > 0
+            own_position = symbol in self.active_positions
 
-        if opposite_signal:
-            if has_any_pos:
-                self.log(f"[{symbol}] Opposite signal detected. Closing ALL existing positions.")
-                for s in active_symbols:
-                    await self.close_position(s, api)
-                has_any_pos = False
+        if opposite_signal and own_position:
+            self.log(f"[{symbol}] Opposite signal detected. Closing {symbol} position.")
+            await self.close_position(symbol, api)
+            own_position = False
 
         if entry_signal:
-            if not has_any_pos:
+            if not own_position:
                 self.log(f"[{symbol}] Strategy match! Entering position...")
                 await self.place_trade_isolated(symbol, api)
             else:
-                self.log(f"[{symbol}] Entry signal ignored. Another position is already open: {active_symbols}")
+                self.log(f"[{symbol}] Entry signal ignored. {symbol} position already open.")
 
     async def close_position(self, symbol, api):
         with self.positions_lock:

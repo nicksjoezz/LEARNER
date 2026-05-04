@@ -1,16 +1,20 @@
-FROM python:3.12-slim
+# Use an official Python runtime as a parent image
+FROM python:3.11-slim
 
+# Set the working directory in the container
 WORKDIR /app
 
-COPY requirements.txt .
+# Ensure logs are visible in the terminal
+ENV PYTHONUNBUFFERED=1
+
+# Copy the current directory contents into the container at /app
+COPY . /app
+
+# Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
-
-# Expose the port Flask runs on
+# Make port 5000 available to the world outside this container
 EXPOSE 5000
 
-# Command to run the application
-# We use eventlet with gunicorn for SocketIO support
-# Added --timeout 300 to handle long initial training periods
-CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--timeout", "300", "--bind", "0.0.0.0:5000", "app:app"]
+# Run app.py when the container launches
+CMD ["python", "app.py"]

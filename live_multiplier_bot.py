@@ -11,18 +11,19 @@ from deriv_api import DerivAPI
 import ta
 from crash_boom_strategy import crash_boom_mtf_strategy
 
-# Strategy Parameters
+# Strategy Parameters — optimized to match detail.md backtest results
+# TP: +150% / +100% ROI | SL: −30% ROI ($3 on $10 stake)
 STRATEGY_CONFIG = {
     'BOOM500': {
         'multiplier': 300,
         'tp_roi': 150.0,
-        'sl_roi': -20.0,
+        'sl_roi': -30.0,
         'direction': 'buy'
     },
     'CRASH500': {
         'multiplier': 300,
         'tp_roi': 100.0,
-        'sl_roi': -20.0,
+        'sl_roi': -30.0,
         'direction': 'sell'
     }
 }
@@ -141,7 +142,9 @@ class MultiplierBot:
                 self.log(f"[{symbol}] Subscription error: {e}", "error")
 
         last_portfolio_sync = time.time()
-        last_heartbeat = time.time()
+        last_heartbeat      = time.time()
+        last_ping           = time.time()
+        portfolio_failures  = 0
 
         try:
             last_ohlc_time = {s: time.time() for s in symbols}
@@ -157,22 +160,39 @@ class MultiplierBot:
 
                 now = time.time()
 
-                # Watchdog check: If no data for any symbol for 5 minutes, reconnect
+                # --- Keepalive ping every 30s (prevents server-side idle disconnect) ---
+                if now - last_ping > 30:
+                    try:
+                        await asyncio.wait_for(api.ping({'ping': 1}), timeout=5)
+                        last_ping = now
+                        portfolio_failures = 0  # Connection is alive; reset failure count
+                    except Exception as ping_err:
+                        self.log(f"Keepalive ping failed: {type(ping_err).__name__}: {ping_err}. Reconnecting...", "error")
+                        return
+
+                # --- Watchdog: no OHLC data for 2 minutes → reconnect ---
                 for symbol in symbols:
-                    if now - last_ohlc_time[symbol] > 300:
-                        self.log(f"[{symbol}] Data stream timeout (5m). Triggering reconnect...", "error")
-                        return # Break to outer loop for reconnect
+                    if now - last_ohlc_time[symbol] > 120:
+                        self.log(f"[{symbol}] Data stream silent for 2m. Triggering reconnect...", "error")
+                        return
 
                 if not api.connected:
                     self.log("API connection lost. Triggering reconnect...", "error")
                     return
 
-                # Unified periodic tasks
-                if now - last_portfolio_sync > 60: # Every minute
-                    await self.sync_open_positions(api)
+                # --- Periodic portfolio sync (every 60s) ---
+                if now - last_portfolio_sync > 60:
+                    success = await self.sync_open_positions(api)
                     last_portfolio_sync = now
+                    if not success:
+                        portfolio_failures += 1
+                        if portfolio_failures >= 3:
+                            self.log(f"Portfolio sync failed {portfolio_failures} times. Reconnecting...", "error")
+                            return
+                    else:
+                        portfolio_failures = 0
 
-                if now - last_heartbeat > 300: # Every 5 minutes
+                if now - last_heartbeat > 300:
                     self.log(f"24/7 Status Check: Monitoring {symbols}. Active: {list(self.active_positions.keys())}")
                     last_heartbeat = now
 
@@ -275,9 +295,9 @@ class MultiplierBot:
         if self.stake_type == 'percent':
             actual_stake = max(1.0, round(self.balance * (self.stake / 100.0), 2))
         tp_usd = round(actual_stake * (config['tp_roi'] / 100.0), 2)
-        sl_usd = round(min(actual_stake * 0.9, abs(actual_stake * (config['sl_roi'] / 100.0))), 2)
+        sl_usd = round(abs(actual_stake * (config['sl_roi'] / 100.0)), 2)
 
-        self.log(f"[{symbol}] Executing {config['direction']} | Stake: ${actual_stake}")
+        self.log(f"[{symbol}] Executing {config['direction']} | Stake: ${actual_stake} | TP: ${tp_usd} | SL: ${sl_usd}")
         params = {
             "buy": 1, "price": actual_stake,
             "parameters": {
@@ -322,10 +342,10 @@ class MultiplierBot:
                 if self.active_positions.get(symbol) == contract_id: del self.active_positions[symbol]
 
     async def sync_open_positions(self, api):
+        """Returns True on success, False on failure."""
         if not api or not api.connected:
-            return
+            return False
         try:
-            # Check if API is still connected before portfolio call
             res = await asyncio.wait_for(api.portfolio(), timeout=15)
             if 'portfolio' in res:
                 contracts = res['portfolio'].get('contracts', [])
@@ -348,7 +368,10 @@ class MultiplierBot:
                         if symbol not in found_symbols:
                             self.log(f"Cleaning up inactive tracking for {symbol}")
                             del self.active_positions[symbol]
-        except Exception as e: self.log(f"Portfolio sync error: {e}", "error")
+            return True
+        except Exception as e:
+            self.log(f"Portfolio sync error: {type(e).__name__}: {e!r}", "error")
+            return False
 
     async def stop(self):
         self.should_run = False
